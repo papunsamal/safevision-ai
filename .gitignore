@@ -1,0 +1,31 @@
+# ---------- Python ----------
+venv/
+__pycache__/
+*.pyc
+*.pyo
+runs/
+.ipynb_checkpoints/
+
+# ---------- Node ----------
+node_modules/
+dist/
+build/
+
+# ---------- Secrets (KABHI push nahi!) ----------
+.env
+
+# ---------- Large assets (GitHub 100MB limit) ----------
+models/*.pt
+models/*.onnx
+datasets/
+videos/
+evidence/alerts/*.jpg
+
+# ---------- Database ----------
+backend/safevision.db
+
+# ---------- IDE / OS ----------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

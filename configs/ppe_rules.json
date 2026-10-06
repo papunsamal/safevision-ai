@@ -1,0 +1,5 @@
+{
+  "required_ppe": ["helmet", "vest"],
+  "optional_ppe": ["gloves", "safety_shoes"],
+  "severity": { "fire": "CRITICAL", "smoke": "HIGH", "no_helmet": "HIGH", "no_vest": "MEDIUM" }
+}

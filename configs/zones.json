@@ -1,0 +1,8 @@
+{
+  "zones": [
+    { "id": "Z1", "name": "Production Area", "cameras": ["CAM-01"] },
+    { "id": "Z2", "name": "Warehouse", "cameras": ["CAM-02"] },
+    { "id": "Z3", "name": "Boiler Area", "cameras": ["CAM-03"] },
+    { "id": "Z4", "name": "Entry Gate", "cameras": ["CAM-04"] }
+  ]
+}
