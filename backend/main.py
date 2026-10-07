@@ -8,6 +8,7 @@ from .utils.logger import get_logger
 from .api import alerts, cameras, detection, workers
 from .ai import ppe_detector
 from .database import database as db
+from .api import alerts, cameras, detection, workers, live
 
 logger = get_logger("main")
 
@@ -25,6 +26,7 @@ app.include_router(workers.router)
 app.include_router(alerts.router)
 app.include_router(cameras.router)
 app.include_router(detection.router)
+app.include_router(live.router)
 db.init_db()
 
 os.makedirs(settings.EVIDENCE_DIR, exist_ok=True)
