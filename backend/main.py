@@ -6,6 +6,8 @@ from fastapi.staticfiles import StaticFiles
 from .config import settings
 from .utils.logger import get_logger
 from .database import database as db
+from .ai import ppe_detector
+from .api import alerts, cameras, detection, workers, live
 
 logger = get_logger("main")
 
@@ -19,18 +21,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# FIX: Initialize database FIRST (before any API calls)
-db.init_db()
-
-# Import routers AFTER DB is ready
-from .api import alerts, cameras, detection, workers, live
-from .ai import ppe_detector
-
 app.include_router(workers.router)
 app.include_router(alerts.router)
 app.include_router(cameras.router)
 app.include_router(detection.router)
 app.include_router(live.router)
+
+# MySQL down ho to bhi backend chale (alerts/reports gracefully empty)
+try:
+    db.init_db()
+except Exception as e:
+    logger.error(f"MySQL init failed (backend phir bhi chalega): {e}")
 
 os.makedirs(settings.EVIDENCE_DIR, exist_ok=True)
 app.mount("/evidence", StaticFiles(directory=settings.EVIDENCE_DIR), name="evidence")

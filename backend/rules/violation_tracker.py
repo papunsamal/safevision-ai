@@ -25,7 +25,7 @@ def record_incident(violation, camera_id, zone_name, frame_url=None):
     _recent_incidents.insert(0, incident)
     _recent_incidents[:] = _recent_incidents[:50]
 
-    # Persistent storage (SQLite)
+        # Persistent storage (MySQL)
     try:
         database.insert_incident(incident, frame_url)
     except Exception as e:

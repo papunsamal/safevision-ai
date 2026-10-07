@@ -37,6 +37,7 @@ DEMO_DETECTIONS = {
 
 
 def real_available():
+    """REAL sirf jab trained PPE model maujood ho."""
     return os.path.exists(settings.MODEL_PATH)
 
 
@@ -65,6 +66,7 @@ def _analyze(name: str, camera_id: str = "CAM-01"):
     last_analysis = None
     last_frame = None
 
+    # PER-FRAME analysis — sahi worker count + sahi helmet assignment
     for idx, frame in video_utils.sample_frames(cap, every_n=15, max_frames=10):
         last_frame = frame
         dets = (ppe_detector.detect(frame)
@@ -76,8 +78,10 @@ def _analyze(name: str, camera_id: str = "CAM-01"):
         last_analysis = compliance_engine.analyze_detections(dets)
 
     if last_analysis is None:
-        last_analysis = {"workers": [], "violations": [],
-                         "stats": {"totalWorkers": 0, "compliantWorkers": 0, "ppeViolations": 0}}
+        last_analysis = {
+            "workers": [], "violations": [],
+            "stats": {"totalWorkers": 0, "compliantWorkers": 0, "ppeViolations": 0},
+        }
 
     # REAL fire/smoke counts (latest analyzed frame)
     stats = last_analysis["stats"]
@@ -85,7 +89,12 @@ def _analyze(name: str, camera_id: str = "CAM-01"):
     stats["smokeIncidents"] = sum(1 for d in last_frame_dets if d["label"].lower() == "smoke")
 
     workers.update_analysis(last_analysis["workers"], stats)
-    database.upsert_daily_stats(stats)
+
+    # FIX: MySQL down ho to analysis crash na ho
+    try:
+        database.upsert_daily_stats(stats)
+    except Exception as e:
+        logger.error(f"Daily stats save failed (MySQL down?): {e}")
 
     # Evidence snapshot: PPE violation YA fire/smoke detection par
     has_fire_smoke = any(d["label"].lower() in ("fire", "smoke") for d in last_frame_dets)
@@ -98,6 +107,7 @@ def _analyze(name: str, camera_id: str = "CAM-01"):
     for v in last_analysis["violations"]:
         alert_manager.report_violation(v, camera_id, zone_name, frame_url)
 
+    # Fire/Smoke incidents (har type ek baar per analysis)
     seen = set()
     for d in last_frame_dets:
         lbl = d["label"].lower()

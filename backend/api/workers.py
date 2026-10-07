@@ -12,9 +12,11 @@ DEMO_WORKERS = [
     {"id": 4, "helmet": True, "vest": True},
 ]
 
-# Latest analysis store — REAL mode mein detection.py isse update karta hai.
-# Jab tak real analysis nahi hua, demo data hi serve hota hai.
-latest_analysis = {"workers": DEMO_WORKERS, "stats": DEMO_STATS}
+# REAL mode: zero se shuru (koi fake data nahi) — real analysis ke baad update hota hai
+EMPTY_STATS = {"totalWorkers": 0, "compliantWorkers": 0, "ppeViolations": 0,
+               "fireIncidents": 0, "smokeIncidents": 0}
+
+latest_analysis = {"workers": [], "stats": EMPTY_STATS}
 
 
 def update_analysis(workers, stats):
@@ -24,10 +26,14 @@ def update_analysis(workers, stats):
 
 
 @router.get("/stats")
-def get_stats():
+def get_stats(mode: str = "REAL"):
+    if mode == "DEMO":
+        return DEMO_STATS
     return latest_analysis["stats"]
 
 
 @router.get("/workers")
-def get_workers():
+def get_workers(mode: str = "REAL"):
+    if mode == "DEMO":
+        return DEMO_WORKERS
     return latest_analysis["workers"]

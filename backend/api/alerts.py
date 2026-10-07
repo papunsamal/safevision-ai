@@ -1,8 +1,9 @@
-import os
 from fastapi import APIRouter
 
-from ..config import settings
 from ..database import database
+from ..utils.logger import get_logger
+
+logger = get_logger("alerts")
 
 router = APIRouter(prefix="/api", tags=["alerts"])
 
@@ -28,16 +29,22 @@ DEMO_REPORTS = {
 
 
 @router.get("/alerts")
-def get_alerts():
-    rows = database.fetch_incidents(50)
-    if rows:
-        return rows
-    return DEMO_ALERTS
+def get_alerts(mode: str = "REAL"):
+    if mode == "DEMO":
+        return DEMO_ALERTS
+    try:
+        return database.fetch_incidents(50)
+    except Exception as e:
+        logger.error(f"Alerts fetch failed (MySQL down?): {e}")
+        return []
 
 
 @router.get("/reports")
-def get_reports():
-    # REAL mode => MySQL se asli trends (demo nahi!)
-    if settings.AI_MODE == "REAL" and os.path.exists(settings.MODEL_PATH):
+def get_reports(mode: str = "REAL"):
+    if mode == "DEMO":
+        return DEMO_REPORTS
+    try:
         return database.fetch_trends()
-    return DEMO_REPORTS
+    except Exception as e:
+        logger.error(f"Reports fetch failed (MySQL down?): {e}")
+        return {"complianceTrend": [], "incidentTrend": []}
