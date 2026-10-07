@@ -5,10 +5,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import settings
 from .utils.logger import get_logger
-from .api import alerts, cameras, detection, workers
-from .ai import ppe_detector
 from .database import database as db
-from .api import alerts, cameras, detection, workers, live
 
 logger = get_logger("main")
 
@@ -22,22 +19,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# FIX: Initialize database FIRST (before any API calls)
+db.init_db()
+
+# Import routers AFTER DB is ready
+from .api import alerts, cameras, detection, workers, live
+from .ai import ppe_detector
+
 app.include_router(workers.router)
 app.include_router(alerts.router)
 app.include_router(cameras.router)
 app.include_router(detection.router)
 app.include_router(live.router)
-db.init_db()
 
 os.makedirs(settings.EVIDENCE_DIR, exist_ok=True)
 app.mount("/evidence", StaticFiles(directory=settings.EVIDENCE_DIR), name="evidence")
 
-# Real YOLO inference code implement ho chuka hai (ai/ modules)
 REAL_IMPLEMENTED = True
 
 
 def effective_mode() -> str:
-    """REAL sirf tab jab: env REAL ho + inference ready ho + trained model exist kare."""
     if settings.AI_MODE == "REAL" and REAL_IMPLEMENTED and os.path.exists(settings.MODEL_PATH):
         return "REAL"
     return "DEMO"
@@ -61,6 +62,5 @@ def health():
     }
 
 
-# Videos ko frontend ke liye serve karo
 if os.path.isdir(settings.VIDEOS_DIR):
     app.mount("/videos", StaticFiles(directory=settings.VIDEOS_DIR), name="videos")

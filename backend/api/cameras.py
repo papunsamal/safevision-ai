@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 router = APIRouter(prefix="/api", tags=["cameras"])
 
+# DEMO-ONLY: Real camera management future scope mein hai
 DEMO_CAMERAS = [
     {"id": "CAM-01", "name": "Factory-Cam-01", "zone": "Production Area", "status": "ONLINE"},
     {"id": "CAM-02", "name": "Factory-Cam-02", "zone": "Warehouse", "status": "ONLINE"},
@@ -12,4 +13,5 @@ DEMO_CAMERAS = [
 
 @router.get("/cameras")
 def get_cameras():
+    """Returns demo camera list. Real RTSP camera management is future scope."""
     return DEMO_CAMERAS
