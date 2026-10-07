@@ -1,5 +1,6 @@
 export default function WorkerCard({ id, helmet, vest, gloves }) {
-  const compliant = helmet && vest;
+  // HONESTY: status sirf helmet par (vest absence reliably detect nahi hota)
+  const compliant = helmet;
   return (
     <div
       className={`rounded-xl border p-4 ${compliant ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-red-500/30 bg-red-500/5'}`}
@@ -11,20 +12,23 @@ export default function WorkerCard({ id, helmet, vest, gloves }) {
         </span>
       </div>
       <div className="flex gap-2 mt-3">
-        <Chip ok={helmet} label="Helmet" />
-        <Chip ok={vest} label="Vest" />
-        {gloves !== undefined && <Chip ok={gloves} label="Gloves" />}
+        <Chip ok={helmet} label="Helmet" danger />
+        {vest !== undefined && <Chip ok={vest} label="Vest (info)" />}
+        {gloves !== undefined && <Chip ok={gloves} label="Gloves" danger />}
       </div>
     </div>
   );
 }
 
-function Chip({ ok, label }) {
+function Chip({ ok, label, danger }) {
+  const tone = ok
+    ? 'bg-emerald-500/10 text-emerald-400'
+    : danger
+      ? 'bg-red-500/10 text-red-400'
+      : 'bg-slate-700/40 text-slate-400';
   return (
-    <span
-      className={`px-2 py-1 rounded text-[10px] font-semibold ${ok ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}
-    >
-      {ok ? '✓' : '✗'} {label}
+    <span className={`px-2 py-1 rounded text-[10px] font-semibold ${tone}`}>
+      {ok ? '✓' : '–'} {label}
     </span>
   );
 }

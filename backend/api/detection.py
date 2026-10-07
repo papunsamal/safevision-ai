@@ -4,12 +4,13 @@ from fastapi import APIRouter, HTTPException
 
 from ..config import settings
 from ..utils import video as video_utils
+from ..utils import evidence
 from ..utils.logger import get_logger
 from ..ai import ppe_detector, fire_detector, smoke_detector
 from ..rules import compliance_engine, zone_rules
 from ..alerts import alert_manager
+from ..database import database
 from . import workers
-from ..utils import evidence
 
 router = APIRouter(prefix="/api", tags=["detection"])
 logger = get_logger("detection")
@@ -25,7 +26,6 @@ DEMO_DETECTIONS = {
     "violation": [
         {"label": "person", "confidence": 0.95, "x": 15, "y": 18, "w": 22, "h": 68},
         {"label": "no_helmet", "confidence": 0.89, "x": 17, "y": 18, "w": 8, "h": 10},
-        {"label": "no_vest", "confidence": 0.84, "x": 17, "y": 38, "w": 16, "h": 24},
         {"label": "person", "confidence": 0.93, "x": 60, "y": 22, "w": 20, "h": 66},
         {"label": "helmet", "confidence": 0.92, "x": 62, "y": 22, "w": 8, "h": 10},
     ],
@@ -37,7 +37,6 @@ DEMO_DETECTIONS = {
 
 
 def real_available():
-    """REAL sirf jab trained PPE model maujood ho."""
     return os.path.exists(settings.MODEL_PATH)
 
 
@@ -64,11 +63,10 @@ def _analyze(name: str, camera_id: str = "CAM-01"):
 
     last_frame_dets = []
     last_analysis = None
-    last_frame = None 
+    last_frame = None
 
-    # PER-FRAME analysis — sahi worker count + sahi helmet assignment
     for idx, frame in video_utils.sample_frames(cap, every_n=15, max_frames=10):
-        last_frame = frame 
+        last_frame = frame
         dets = (ppe_detector.detect(frame)
                 + fire_detector.detect(frame)
                 + smoke_detector.detect(frame))
@@ -78,27 +76,28 @@ def _analyze(name: str, camera_id: str = "CAM-01"):
         last_analysis = compliance_engine.analyze_detections(dets)
 
     if last_analysis is None:
-        last_analysis = {
-            "workers": [], "violations": [],
-            "stats": {"totalWorkers": 0, "compliantWorkers": 0, "ppeViolations": 0},
-        }
+        last_analysis = {"workers": [], "violations": [],
+                         "stats": {"totalWorkers": 0, "compliantWorkers": 0, "ppeViolations": 0}}
 
-    workers.update_analysis(last_analysis["workers"], last_analysis["stats"])
-        # Violation frame ko evidence ke roop mein save karo
+    # REAL fire/smoke counts (latest analyzed frame)
+    stats = last_analysis["stats"]
+    stats["fireIncidents"] = sum(1 for d in last_frame_dets if d["label"].lower() == "fire")
+    stats["smokeIncidents"] = sum(1 for d in last_frame_dets if d["label"].lower() == "smoke")
+
+    workers.update_analysis(last_analysis["workers"], stats)
+    database.upsert_daily_stats(stats)
+
+    # Evidence snapshot: PPE violation YA fire/smoke detection par
+    has_fire_smoke = any(d["label"].lower() in ("fire", "smoke") for d in last_frame_dets)
     frame_url = None
-    if last_analysis["violations"] and last_frame is not None:
+    if (last_analysis["violations"] or has_fire_smoke) and last_frame is not None:
         frame_url = evidence.save_snapshot(last_frame, name)
 
+    # Incidents (dedup cooldown ke saath)
     zone_name = zone_rules.zone_for_camera(camera_id).get("name", "Unknown")
     for v in last_analysis["violations"]:
         alert_manager.report_violation(v, camera_id, zone_name, frame_url)
 
-    # Alerts with 60-sec cooldown (spam nahi)
-    zone_name = zone_rules.zone_for_camera(camera_id).get("name", "Unknown")
-    for v in last_analysis["violations"]:
-        alert_manager.report_violation(v, camera_id, zone_name)
-
-    # Fire/Smoke incidents (har type ek baar per analysis)
     seen = set()
     for d in last_frame_dets:
         lbl = d["label"].lower()
@@ -108,9 +107,10 @@ def _analyze(name: str, camera_id: str = "CAM-01"):
                 {"type": lbl.upper(),
                  "severity": "CRITICAL" if lbl == "fire" else "HIGH",
                  "message": f"{lbl.capitalize()} Detected"},
-                camera_id, zone_name)
+                camera_id, zone_name, frame_url)
 
-    logger.info(f"REAL analysis complete: {name} | workers={last_analysis['stats']['totalWorkers']}")
+    logger.info(f"REAL analysis: {name} | workers={stats['totalWorkers']} "
+                f"fire={stats['fireIncidents']} smoke={stats['smokeIncidents']}")
 
     return {
         "mode": "REAL",
@@ -118,7 +118,7 @@ def _analyze(name: str, camera_id: str = "CAM-01"):
         "detections": video_utils.to_percent_boxes(last_frame_dets, w, h),
         "workers": last_analysis["workers"],
         "violations": last_analysis["violations"],
-        "stats": last_analysis["stats"],
+        "stats": stats,
     }
 
 

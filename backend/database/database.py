@@ -17,7 +17,6 @@ def get_conn():
 
 
 def init_db():
-    """Database + table dono auto-create karta hai."""
     from . import models
     conn = mysql.connector.connect(
         host=settings.MYSQL_HOST,
@@ -28,7 +27,8 @@ def init_db():
     cur = conn.cursor()
     cur.execute(f"CREATE DATABASE IF NOT EXISTS {settings.MYSQL_DB}")
     cur.execute(f"USE {settings.MYSQL_DB}")
-    cur.execute(models.SCHEMA)
+    cur.execute(models.INCIDENTS_TABLE)
+    cur.execute(models.DAILY_STATS_TABLE)
     conn.commit()
     cur.close()
     conn.close()
@@ -53,7 +53,7 @@ def fetch_incidents(limit: int = 50):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
-        "SELECT id, type, severity, message, camera, zone, created_at "
+        "SELECT id, type, severity, message, camera, zone, frame_url, created_at "
         "FROM incidents ORDER BY id DESC LIMIT %s",
         (limit,),
     )
@@ -63,8 +63,56 @@ def fetch_incidents(limit: int = 50):
     return [
         {
             "id": i, "type": t, "severity": sev, "message": msg,
-            "camera": cam, "zone": zone,
+            "camera": cam, "zone": zone, "frame_url": furl,
             "time": str(created)[11:16] if created else "—",
         }
-        for (i, t, sev, msg, cam, zone, created) in rows
+        for (i, t, sev, msg, cam, zone, furl, created) in rows
     ]
+
+
+def upsert_daily_stats(stats: dict):
+    """Aaj ke din ka latest analysis snapshot save karo."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO daily_stats (stat_date, total_workers, compliant_workers, "
+        "ppe_violations, fire_incidents, smoke_incidents) "
+        "VALUES (CURDATE(),%s,%s,%s,%s,%s) "
+        "ON DUPLICATE KEY UPDATE total_workers=VALUES(total_workers), "
+        "compliant_workers=VALUES(compliant_workers), ppe_violations=VALUES(ppe_violations), "
+        "fire_incidents=VALUES(fire_incidents), smoke_incidents=VALUES(smoke_incidents)",
+        (stats.get("totalWorkers", 0), stats.get("compliantWorkers", 0),
+         stats.get("ppeViolations", 0), stats.get("fireIncidents", 0),
+         stats.get("smokeIncidents", 0)),
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def fetch_trends(days: int = 7):
+    """REAL reports ke liye MySQL se 7-din ke trends."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT stat_date, total_workers, compliant_workers FROM daily_stats "
+        "ORDER BY stat_date DESC LIMIT %s", (days,))
+    comp_rows = cur.fetchall()
+    cur.execute(
+        "SELECT DATE(created_at), SUM(type='PPE'), SUM(type='FIRE'), SUM(type='SMOKE') "
+        "FROM incidents WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL %s DAY) "
+        "GROUP BY DATE(created_at) ORDER BY DATE(created_at)", (days,))
+    inc_rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    return {
+        "complianceTrend": [
+            {"day": d.strftime("%a"), "value": round(c / t * 100) if t else 0}
+            for (d, t, c) in reversed(comp_rows)
+        ],
+        "incidentTrend": [
+            {"day": d.strftime("%a"), "ppe": int(p or 0), "fire": int(f or 0), "smoke": int(s or 0)}
+            for (d, p, f, s) in inc_rows
+        ],
+    }

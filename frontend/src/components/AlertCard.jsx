@@ -1,5 +1,7 @@
 import { Flame, Wind, HardHat, Info } from 'lucide-react';
 
+const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
 const iconFor = { FIRE: Flame, SMOKE: Wind, PPE: HardHat };
 const sevTone = {
   LOW: 'bg-blue-500/10 text-blue-400 border-blue-500/30',
@@ -27,6 +29,13 @@ export default function AlertCard({ alert }) {
         <p className="text-xs text-slate-500 mt-1">
           {alert.camera} • {alert.zone} • {alert.time}
         </p>
+        {alert.frame_url && (
+          <img
+            src={`${API}${alert.frame_url}`}
+            alt="evidence"
+            className="mt-2 rounded-lg border border-slate-700 max-h-32"
+          />
+        )}
       </div>
     </div>
   );

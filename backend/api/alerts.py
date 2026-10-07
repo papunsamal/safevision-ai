@@ -1,14 +1,15 @@
+import os
 from fastapi import APIRouter
 
+from ..config import settings
 from ..database import database
 
 router = APIRouter(prefix="/api", tags=["alerts"])
 
 DEMO_ALERTS = [
-    {"id": 1, "type": "PPE", "severity": "HIGH", "message": "No Helmet Detected", "camera": "CAM-01", "zone": "Production Area", "time": "10:41 AM"},
-    {"id": 2, "type": "FIRE", "severity": "CRITICAL", "message": "Fire Detected", "camera": "CAM-02", "zone": "Warehouse", "time": "10:38 AM"},
-    {"id": 3, "type": "SMOKE", "severity": "HIGH", "message": "Smoke Detected", "camera": "CAM-03", "zone": "Boiler Area", "time": "10:31 AM"},
-    {"id": 4, "type": "PPE", "severity": "MEDIUM", "message": "No Vest Detected", "camera": "CAM-01", "zone": "Production Area", "time": "09:58 AM"},
+    {"id": 1, "type": "PPE", "severity": "HIGH", "message": "No Helmet Detected", "camera": "CAM-01", "zone": "Production Area", "time": "10:41"},
+    {"id": 2, "type": "FIRE", "severity": "CRITICAL", "message": "Fire Detected", "camera": "CAM-02", "zone": "Warehouse", "time": "10:38"},
+    {"id": 3, "type": "SMOKE", "severity": "HIGH", "message": "Smoke Detected", "camera": "CAM-03", "zone": "Boiler Area", "time": "10:31"},
 ]
 
 DEMO_REPORTS = {
@@ -28,7 +29,7 @@ DEMO_REPORTS = {
 
 @router.get("/alerts")
 def get_alerts():
-    rows = database.fetch_incidents(50)   # REAL incidents (persistent)
+    rows = database.fetch_incidents(50)
     if rows:
         return rows
     return DEMO_ALERTS
@@ -36,4 +37,7 @@ def get_alerts():
 
 @router.get("/reports")
 def get_reports():
+    # REAL mode => MySQL se asli trends (demo nahi!)
+    if settings.AI_MODE == "REAL" and os.path.exists(settings.MODEL_PATH):
+        return database.fetch_trends()
     return DEMO_REPORTS

@@ -51,21 +51,17 @@ def analyze_detections(dets):
         no_helmet = head in NO_HELMET_CLASSES
         vest_ok = vest == CLASS_VEST
 
+        # HONESTY: dataset mein 'no_vest' class NAHI hai ->
+        # compliance sirf helmet par; vest sirf informational
         workers.append({"id": i, "helmet": helmet_ok, "vest": vest_ok, "head_status": head})
 
-        if helmet_ok and (vest_ok or vest is None):
+        if helmet_ok:
             compliant_count += 1
 
         if no_helmet:
             violations.append({
                 "type": "PPE", "rule": "NO_HELMET", "severity": "HIGH",
                 "message": "No Helmet Detected", "worker_id": i,
-            })
-
-        if vest is None and len(vest_dets) > 0:
-            violations.append({
-                "type": "PPE", "rule": "NO_VEST", "severity": "MEDIUM",
-                "message": "Safety Vest Missing", "worker_id": i,
             })
 
     return {

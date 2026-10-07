@@ -1,5 +1,10 @@
 {
-  "required_ppe": ["helmet", "vest"],
-  "optional_ppe": ["gloves", "safety_shoes"],
-  "severity": { "fire": "CRITICAL", "smoke": "HIGH", "no_helmet": "HIGH", "no_vest": "MEDIUM" }
+  "required_ppe": ["helmet"],
+  "optional_ppe": ["vest", "gloves", "goggles", "safety_shoes"],
+  "honesty_note": "Dataset mein 'no_vest' class nahi hai — vest detection sirf informational hai, violation nahi.",
+  "severity": {
+    "fire": "CRITICAL",
+    "smoke": "HIGH",
+    "no_helmet": "HIGH"
+  }
 }

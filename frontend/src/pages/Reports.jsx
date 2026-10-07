@@ -19,7 +19,17 @@ export default function Reports({ mode }) {
     getReports(mode).then(setReports);
   }, [mode]);
 
-  if (!reports) return <p className="text-sm text-slate-500">Insufficient data</p>;
+  const empty =
+    !reports ||
+    ((reports.complianceTrend?.length || 0) === 0 && (reports.incidentTrend?.length || 0) === 0);
+
+  if (empty) {
+    return (
+      <p className="text-sm text-slate-500">
+        Insufficient data — real analyses ke baad trends yahan MySQL se dikhenge.
+      </p>
+    );
+  }
 
   return (
     <div className="grid lg:grid-cols-2 gap-6">
