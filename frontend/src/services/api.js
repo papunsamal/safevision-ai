@@ -133,14 +133,16 @@ export const getVideos = async () => {
 
 /* REAL: { detections, timeline } — timeline = per-frame synced boxes
  * DEMO: static boxes (timeline null) */
-export const getDetections = async (mode, scenario) => {
+export const getDetections = (mode, scenario) => {
   if (mode === 'DEMO') {
-    return { detections: demoDetections[scenario] || [], timeline: null };
+    return Promise.resolve(demoDetections[scenario] || []);
   }
-  try {
-    const r = await http.get(`/api/detections?video=${scenario}&mode=${mode}`);
-    return r.data;
-  } catch {
-    return { detections: [], timeline: null };
-  }
+  // REAL mode: do NOT silently catch errors — let frontend know
+  return http
+    .get(`/api/detections?video=${scenario}&mode=${mode}`)
+    .then(r => r.data)
+    .catch(err => {
+      console.error('REAL detection failed:', err);
+      throw err; // Propagate error instead of hiding it
+    });
 };

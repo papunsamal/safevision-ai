@@ -14,15 +14,15 @@ def _load():
         if os.path.exists(settings.FIRE_SMOKE_MODEL_PATH):
             from ultralytics import YOLO
             _model = YOLO(settings.FIRE_SMOKE_MODEL_PATH)
-            logger.info("Fire/Smoke model loaded")
+            logger.info("Fire/Smoke model loaded (shared)")
         else:
             _model = False
-            logger.warning("Fire/Smoke model NOT found -> detection disabled (no fake AI)")
+            logger.warning("Fire/Smoke model NOT found -> detection disabled")
     return _model
 
 
 def detect_all(frame):
-    """EK hi inference mein fire + smoke dono (duplicate inference fix)."""
+    """EK hi inference mein fire + smoke dono (no duplicate model load)."""
     fid = id(frame)
     if _last["frame_id"] == fid:
         return _last["dets"]

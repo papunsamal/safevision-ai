@@ -2,13 +2,11 @@ from ..utils.logger import get_logger
 
 logger = get_logger("compliance_engine")
 
-CLASS_PERSON = "Person"
 CLASS_HELMET = "helmet"
 CLASS_VEST = "vest"
 NO_HELMET_CLASSES = {"no_helmet", "none"}
 
 # Positional bands: helmet person ke TOP mein, vest MIDDLE mein
-# (dusre worker ka helmet galat person ko assign nahi hoga)
 HEAD_BAND = (0.0, 0.35)
 VEST_BAND = (0.15, 0.75)
 
@@ -31,7 +29,7 @@ def _assign(person_box, candidates, band, threshold=0.3):
         b = det["bbox"]
         cy = (b[1] + b[3]) / 2
         rel_y = (cy - py1) / ph if ph else 1
-        if not (band[0] <= rel_y <= band[1]):   # vertical position check
+        if not (band[0] <= rel_y <= band[1]):
             continue
         inter = _overlap(person_box, b)
         if inter <= 0:
@@ -44,9 +42,14 @@ def _assign(person_box, candidates, band, threshold=0.3):
     return best_label
 
 
+def _is_person(label: str) -> bool:
+    """Case-insensitive person detection (Person/person/PERSON sab match)."""
+    return label.lower() == "person"
+
+
 def analyze_detections(dets):
-    persons = [d for d in dets if d["label"] == CLASS_PERSON]
-    persons.sort(key=lambda d: d["bbox"][0])   # left-to-right => stable IDs
+    persons = [d for d in dets if _is_person(d["label"])]
+    persons.sort(key=lambda d: d["bbox"][0])
     head_dets = [d for d in dets if d["label"] == CLASS_HELMET or d["label"] in NO_HELMET_CLASSES]
     vest_dets = [d for d in dets if d["label"] == CLASS_VEST]
 
