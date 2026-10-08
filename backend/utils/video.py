@@ -11,6 +11,10 @@ def open_video(path: str):
     return cap
 
 
+def get_frame_count(cap) -> int:
+    return int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+
+
 def sample_frames(cap, every_n: int = 10, max_frames: int = 50):
     idx = 0
     processed = 0

@@ -1,4 +1,4 @@
-# MySQL schema — 2 tables
+# MySQL schema — 3 tables
 
 INCIDENTS_TABLE = """
 CREATE TABLE IF NOT EXISTS incidents (
@@ -25,5 +25,12 @@ CREATE TABLE IF NOT EXISTS daily_stats (
     fire_incidents INT DEFAULT 0,
     smoke_incidents INT DEFAULT 0,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB
+"""
+
+ALERT_COOLDOWNS_TABLE = """
+CREATE TABLE IF NOT EXISTS alert_cooldowns (
+    ckey VARCHAR(191) PRIMARY KEY,
+    last_seen DOUBLE NOT NULL
 ) ENGINE=InnoDB
 """

@@ -6,3 +6,4 @@ ultralytics
 opencv-python
 numpy
 pillow
+mysql-connector-python

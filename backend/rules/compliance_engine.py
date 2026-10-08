@@ -2,11 +2,15 @@ from ..utils.logger import get_logger
 
 logger = get_logger("compliance_engine")
 
-# Model ke ACTUAL trained class names
 CLASS_PERSON = "Person"
 CLASS_HELMET = "helmet"
 CLASS_VEST = "vest"
-NO_HELMET_CLASSES = {"no_helmet", "none"}   # 'none' = head without helmet
+NO_HELMET_CLASSES = {"no_helmet", "none"}
+
+# Positional bands: helmet person ke TOP mein, vest MIDDLE mein
+# (dusre worker ka helmet galat person ko assign nahi hoga)
+HEAD_BAND = (0.0, 0.35)
+VEST_BAND = (0.15, 0.75)
 
 
 def _overlap(box1, box2):
@@ -19,11 +23,16 @@ def _overlap(box1, box2):
     return (x2 - x1) * (y2 - y1)
 
 
-def _assign(person_box, candidates, threshold=0.3):
-    """Gear box kitna person ke ANDAR hai — usi se match karo."""
+def _assign(person_box, candidates, band, threshold=0.3):
+    px1, py1, px2, py2 = person_box
+    ph = py2 - py1
     best_label, best_score = None, 0
     for det in candidates:
         b = det["bbox"]
+        cy = (b[1] + b[3]) / 2
+        rel_y = (cy - py1) / ph if ph else 1
+        if not (band[0] <= rel_y <= band[1]):   # vertical position check
+            continue
         inter = _overlap(person_box, b)
         if inter <= 0:
             continue
@@ -37,6 +46,7 @@ def _assign(person_box, candidates, threshold=0.3):
 
 def analyze_detections(dets):
     persons = [d for d in dets if d["label"] == CLASS_PERSON]
+    persons.sort(key=lambda d: d["bbox"][0])   # left-to-right => stable IDs
     head_dets = [d for d in dets if d["label"] == CLASS_HELMET or d["label"] in NO_HELMET_CLASSES]
     vest_dets = [d for d in dets if d["label"] == CLASS_VEST]
 
@@ -44,15 +54,13 @@ def analyze_detections(dets):
     compliant_count = 0
 
     for i, p in enumerate(persons, start=1):
-        head = _assign(p["bbox"], head_dets)
-        vest = _assign(p["bbox"], vest_dets) if vest_dets else None
+        head = _assign(p["bbox"], head_dets, HEAD_BAND)
+        vest = _assign(p["bbox"], vest_dets, VEST_BAND) if vest_dets else None
 
         helmet_ok = head == CLASS_HELMET
         no_helmet = head in NO_HELMET_CLASSES
         vest_ok = vest == CLASS_VEST
 
-        # HONESTY: dataset mein 'no_vest' class NAHI hai ->
-        # compliance sirf helmet par; vest sirf informational
         workers.append({"id": i, "helmet": helmet_ok, "vest": vest_ok, "head_status": head})
 
         if helmet_ok:

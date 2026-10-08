@@ -1,20 +1,36 @@
 import { useEffect, useState } from 'react';
 import CameraFeed from '../components/CameraFeed';
-import { getDetections } from '../services/api';
+import { getDetections, getVideos } from '../services/api';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 export default function Monitoring({ mode }) {
+  const [videos, setVideos] = useState([]);
   const [scenario, setScenario] = useState('compliant');
-  const [detections, setDetections] = useState([]);
+  const [result, setResult] = useState({ detections: [], timeline: null });
+
+  useEffect(() => {
+    getVideos().then(setVideos);
+  }, []);
+
+  // REAL: sirf jo videos asal mein maujood hain (404 fix); DEMO: fixed scenarios
+  const options =
+    mode === 'REAL' && videos.length ? videos : ['compliant', 'violation', 'fire_smoke'];
+
+  useEffect(() => {
+    if (scenario !== 'live' && !options.includes(scenario)) setScenario(options[0]);
+  }, [options, scenario]);
 
   useEffect(() => {
     if (scenario === 'live') {
-      setDetections([]);
+      setResult({ detections: [], timeline: null });
       return;
     }
-    getDetections(mode, scenario).then(setDetections);
+    getDetections(mode, scenario).then(setResult);
   }, [mode, scenario]);
+
+  const detections = result.detections || [];
+  const timeline = result.timeline || null;
 
   const persons = detections.filter(d => d.label.toLowerCase() === 'person').length;
   const risks = detections.filter(
@@ -25,7 +41,7 @@ export default function Monitoring({ mode }) {
       d.label.toLowerCase() === 'smoke'
   );
 
-  const videoUrl = mode === 'REAL' ? `${API}/videos/${scenario}.mp4` : null;
+  const videoUrl = mode === 'REAL' && scenario !== 'live' ? `${API}/videos/${scenario}.mp4` : null;
 
   return (
     <div className="grid lg:grid-cols-3 gap-6">
@@ -35,9 +51,11 @@ export default function Monitoring({ mode }) {
           onChange={e => setScenario(e.target.value)}
           className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm"
         >
-          <option value="compliant">Compliant Video</option>
-          <option value="violation">Violation Video</option>
-          <option value="fire_smoke">Fire / Smoke Video</option>
+          {options.map(v => (
+            <option key={v} value={v}>
+              {v} Video
+            </option>
+          ))}
           <option value="live">🔴 Live Webcam (REAL)</option>
         </select>
 
@@ -54,6 +72,7 @@ export default function Monitoring({ mode }) {
             title={`Factory Cam — ${scenario}`}
             videoUrl={videoUrl}
             detections={detections}
+            timeline={timeline}
             demo={mode === 'DEMO'}
           />
         )}

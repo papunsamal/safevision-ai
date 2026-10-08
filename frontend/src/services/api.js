@@ -108,7 +108,7 @@ async function fetchOrDemo(mode, path, demo, fallback) {
 }
 
 /* ----------------- API FUNCTIONS ----------
- * FIX: mode backend ko bheja jata hai (?mode=...) taaki backend
+ * mode backend ko bheja jata hai (?mode=...) taaki backend
  * REAL mein kabhi demo data return na kare.
  */
 
@@ -120,10 +120,27 @@ export const getAlerts = mode => fetchOrDemo(mode, `/api/alerts?mode=${mode}`, d
 
 export const getReports = mode => fetchOrDemo(mode, `/api/reports?mode=${mode}`, demoReports, null);
 
-export const getDetections = (mode, scenario) =>
-  fetchOrDemo(
-    mode,
-    `/api/detections?video=${scenario}&mode=${mode}`,
-    demoDetections[scenario] || [],
-    []
-  );
+/* Videos jo backend ke videos/ folder mein ASAL mein maujood hain
+ * (frontend dropdown inhi se banta hai — 404/"video not found" fix) */
+export const getVideos = async () => {
+  try {
+    const r = await http.get('/api/videos');
+    return r.data || [];
+  } catch {
+    return [];
+  }
+};
+
+/* REAL: { detections, timeline } — timeline = per-frame synced boxes
+ * DEMO: static boxes (timeline null) */
+export const getDetections = async (mode, scenario) => {
+  if (mode === 'DEMO') {
+    return { detections: demoDetections[scenario] || [], timeline: null };
+  }
+  try {
+    const r = await http.get(`/api/detections?video=${scenario}&mode=${mode}`);
+    return r.data;
+  } catch {
+    return { detections: [], timeline: null };
+  }
+};
