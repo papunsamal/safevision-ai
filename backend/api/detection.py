@@ -56,9 +56,9 @@ def list_videos():
     return []
 
 
-def _analyze(name: str, camera_id: str = "CAM-01"):
+def _analyze(name: str, camera_id: str = "CAM-01", resolved_mode: str = None):
     # ---- DEMO fallback (clearly labeled — no fake AI) ----
-    if effective_mode() == "DEMO":
+    if (resolved_mode or effective_mode()) == "DEMO":
         return {
             "mode": "DEMO", "video": name,
             "detections": DEMO_DETECTIONS.get(name, []),
@@ -195,15 +195,17 @@ def _analyze(name: str, camera_id: str = "CAM-01"):
 
 @router.get("/detections")
 def get_detections(video: str = "compliant", mode: str = "DEMO"):
-    if effective_mode(mode) == "REAL":
-        return _analyze(video)
+    rm = effective_mode(mode)
+    if rm == "REAL":
+        return _analyze(video, resolved_mode=rm)
     return {"mode": "DEMO", "detections": DEMO_DETECTIONS.get(video, [])}
 
 
 @router.post("/analyze-video")
 def analyze_video(video: str = "violation", mode: str = "DEMO"):
-    if effective_mode(mode) == "REAL":
-        return _analyze(video)
+    rm = effective_mode(mode)
+    if rm == "REAL":
+        return _analyze(video, resolved_mode=rm)
     return {
         "mode": "DEMO", "video": video,
         "detections": DEMO_DETECTIONS.get(video, []),

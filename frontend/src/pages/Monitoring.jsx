@@ -14,10 +14,9 @@ export default function Monitoring({ mode }) {
     setStats(null);
     if (scenario === 'live') return;
     getDetections(mode, scenario).then(res => {
-      if (res && res.detections) {
-        setDetections(res.detections);
-        setStats(res.stats || null);
-      }
+      const list = Array.isArray(res) ? res : (res?.detections ?? []);
+      setDetections(list);
+      setStats(!Array.isArray(res) ? (res?.stats ?? null) : null);
     });
   }, [mode, scenario]);
 
