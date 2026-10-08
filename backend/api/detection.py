@@ -37,7 +37,6 @@ DEMO_DETECTIONS = {
 
 
 def effective_mode() -> str:
-    """REAL tabhi jab trained model maujood ho."""
     if settings.AI_MODE == "REAL" and os.path.exists(settings.MODEL_PATH):
         return "REAL"
     return "DEMO"
@@ -45,7 +44,6 @@ def effective_mode() -> str:
 
 @router.get("/videos")
 def list_videos():
-    """Available video names (404 fix)."""
     if os.path.isdir(settings.VIDEOS_DIR):
         return sorted(f[:-4] for f in os.listdir(settings.VIDEOS_DIR)
                       if f.lower().endswith(".mp4"))
@@ -55,7 +53,7 @@ def list_videos():
 def _analyze(name: str, camera_id: str = "CAM-01"):
     mode = effective_mode()
 
-    # DEMO fallback
+    # ---- DEMO fallback (unchanged, clearly labeled) ----
     if mode == "DEMO":
         return {
             "mode": "DEMO", "video": name,
@@ -65,7 +63,7 @@ def _analyze(name: str, camera_id: str = "CAM-01"):
             "stats": workers.DEMO_STATS,
         }
 
-    # REAL pipeline
+    # ---- REAL pipeline ----
     path = os.path.join(settings.VIDEOS_DIR, f"{name}.mp4")
     if not os.path.exists(path):
         raise HTTPException(404, f"Video not found: videos/{name}.mp4")
@@ -74,104 +72,103 @@ def _analyze(name: str, camera_id: str = "CAM-01"):
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    # Aggregate across ALL sampled frames (not just last)
-    all_workers = []
-    all_violations = []
-    fire_count = 0
-    smoke_count = 0
+    frame_results = []
     last_frame_dets = []
     evidence_frame = None
+    sig_counts = {}
+    fire_peak = smoke_peak = 0
 
     for idx, frame in video_utils.sample_frames(cap, every_n=15, max_frames=10):
         dets = (ppe_detector.detect(frame)
                 + fire_detector.detect(frame)
                 + smoke_detector.detect(frame))
-        
         if not dets:
             continue
-
         last_frame_dets = dets
+
         analysis = compliance_engine.analyze_detections(dets)
+        frame_results.append({"frame": frame, "analysis": analysis})
 
-        # Collect workers from this frame
-        all_workers.extend(analysis["workers"])
-        all_violations.extend(analysis["violations"])
+        fire_n = sum(1 for d in dets if d["label"] == "fire")
+        smoke_n = sum(1 for d in dets if d["label"] == "smoke")
+        # Bug #2: peak concurrent = minimum distinct events
+        # (same fire 10 frames mein dikhe to count 1 hi rahega, 10 nahi)
+        fire_peak = max(fire_peak, fire_n)
+        smoke_peak = max(smoke_peak, smoke_n)
 
-        # Count unique fire/smoke events (not peak)
-        fire_count += sum(1 for d in dets if d["label"] == "fire")
-        smoke_count += sum(1 for d in dets if d["label"] == "smoke")
-
-        # Evidence = frame with first violation/detection
-        if evidence_frame is None and (analysis["violations"] or fire_count or smoke_count):
+        if evidence_frame is None and (analysis["violations"] or fire_n or smoke_n):
             evidence_frame = frame
 
-     # Deduplicate workers by ID (keep first occurrence)
-    seen_ids = set()
-    unique_workers = []
-    for wk in all_workers:
-        if wk["id"] not in seen_ids:
-            seen_ids.add(wk["id"])
-            unique_workers.append(wk)
+        # temporal confirmation counts (single-frame false alert fix)
+        for v in analysis["violations"]:
+            sig = (v["rule"], v.get("worker_id"))
+            sig_counts[sig] = sig_counts.get(sig, 0) + 1
 
-    # Deduplicate violations by (rule, worker_id)
-    seen_violations = set()
-    unique_violations = []
-    for v in all_violations:
-        sig = (v["rule"], v.get("worker_id"))
-        if sig not in seen_violations:
-            seen_violations.add(sig)
-            unique_violations.append(v)
-
-    compliant_count = sum(1 for w in unique_workers if w["helmet"])
+    if not frame_results:
+        workers_list, violations_list = [], []
+        compliant = 0
+    else:
+        # Bug #1: workers + violations EK HI frame (best frame) se —
+        # frame-local IDs ko persistent identity ki tarah claim nahi karte.
+        best = max(frame_results,
+                   key=lambda fr: (len(fr["analysis"]["violations"]), len(fr["analysis"]["workers"])))
+        workers_list = best["analysis"]["workers"]
+        compliant = best["analysis"]["stats"]["compliantWorkers"]
+        # sirf temporally confirmed (>=2 frames) violations report karo,
+        # best frame ke consistent worker IDs ke saath
+        violations_list = [
+            v for v in best["analysis"]["violations"]
+            if sig_counts.get((v["rule"], v.get("worker_id")), 0) >= 2
+        ]
 
     stats = {
-        "totalWorkers": len(unique_workers),
-        "compliantWorkers": compliant_count,
-        "ppeViolations": len(unique_violations),
-        "fireIncidents": fire_count,   # Bug #6: actual count, not peak
-        "smokeIncidents": smoke_count,
+        "totalWorkers": len(workers_list),
+        "compliantWorkers": compliant,
+        "ppeViolations": len(violations_list),
+        "fireIncidents": fire_peak,
+        "smokeIncidents": smoke_peak,
     }
 
-    workers.update_analysis(unique_workers, stats)
-    database.upsert_daily_stats(stats)
+    workers.update_analysis(workers_list, stats)
+    try:
+        database.upsert_daily_stats(stats)
+    except Exception as e:
+        logger.error(f"Daily stats save failed (MySQL down?): {e}")
 
-    # Evidence snapshot
     frame_url = None
-    if (unique_violations or fire_count or smoke_count) and evidence_frame is not None:
+    if (violations_list or fire_peak or smoke_peak) and evidence_frame is not None:
         frame_url = evidence.save_snapshot(evidence_frame, name)
 
-    # Incidents
     zone_name = zone_rules.zone_for_camera(camera_id).get("name", "Unknown")
-    for v in unique_violations:
+    for v in violations_list:
         alert_manager.report_violation(v, camera_id, zone_name, frame_url)
 
-    if fire_count > 0:
+    if fire_peak > 0:
         alert_manager.report_violation(
             {"type": "FIRE", "severity": "CRITICAL", "message": "Fire Detected"},
             camera_id, zone_name, frame_url)
-    if smoke_count > 0:
+    if smoke_peak > 0:
         alert_manager.report_violation(
             {"type": "SMOKE", "severity": "HIGH", "message": "Smoke Detected"},
             camera_id, zone_name, frame_url)
 
     logger.info(f"REAL analysis: {name} | workers={stats['totalWorkers']} "
-                f"fire={fire_count} smoke={smoke_count}")
+                f"fire={fire_peak} smoke={smoke_peak}")
 
     return {
         "mode": "REAL", "video": name,
         "detections": video_utils.to_percent_boxes(last_frame_dets, w, h),
-        "workers": unique_workers,
-        "violations": unique_violations,
+        "workers": workers_list,
+        "violations": violations_list,
         "stats": stats,
     }
 
 
 @router.get("/detections")
 def get_detections(video: str = "compliant", mode: str = "DEMO"):
-    result = _analyze(video)
     if mode == "REAL":
-        return result
-    return DEMO_DETECTIONS.get(video, [])
+        return _analyze(video)
+    return {"mode": "DEMO", "detections": DEMO_DETECTIONS.get(video, [])}
 
 
 @router.post("/analyze-video")

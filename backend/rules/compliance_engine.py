@@ -5,8 +5,9 @@ logger = get_logger("compliance_engine")
 CLASS_HELMET = "helmet"
 CLASS_VEST = "vest"
 NO_HELMET_CLASSES = {"no_helmet", "none"}
+# Ye violation sirf tab banegi jab MODEL ye classes actually return kare
+NO_VEST_CLASSES = {"no_vest", "without_vest", "no-vest"}
 
-# Positional bands: helmet person ke TOP mein, vest MIDDLE mein
 HEAD_BAND = (0.0, 0.35)
 VEST_BAND = (0.15, 0.75)
 
@@ -43,7 +44,6 @@ def _assign(person_box, candidates, band, threshold=0.3):
 
 
 def _is_person(label: str) -> bool:
-    """Case-insensitive person detection (Person/person/PERSON sab match)."""
     return label.lower() == "person"
 
 
@@ -51,7 +51,7 @@ def analyze_detections(dets):
     persons = [d for d in dets if _is_person(d["label"])]
     persons.sort(key=lambda d: d["bbox"][0])
     head_dets = [d for d in dets if d["label"] == CLASS_HELMET or d["label"] in NO_HELMET_CLASSES]
-    vest_dets = [d for d in dets if d["label"] == CLASS_VEST]
+    vest_dets = [d for d in dets if d["label"] == CLASS_VEST or d["label"] in NO_VEST_CLASSES]
 
     workers, violations = [], []
     compliant_count = 0
@@ -63,16 +63,25 @@ def analyze_detections(dets):
         helmet_ok = head == CLASS_HELMET
         no_helmet = head in NO_HELMET_CLASSES
         vest_ok = vest == CLASS_VEST
+        no_vest = vest in NO_VEST_CLASSES   # model class na de to ye kabhi true nahi hoga
 
-        workers.append({"id": i, "helmet": helmet_ok, "vest": vest_ok, "head_status": head})
+        workers.append({"id": i, "helmet": helmet_ok, "vest": vest_ok,
+                        "no_vest": no_vest, "head_status": head})
 
-        if helmet_ok:
+        # compliant = helmet OK aur (agar model vest-violation jaanta ho) vest missing NA ho
+        if helmet_ok and not no_vest:
             compliant_count += 1
 
         if no_helmet:
             violations.append({
                 "type": "PPE", "rule": "NO_HELMET", "severity": "HIGH",
                 "message": "No Helmet Detected", "worker_id": i,
+            })
+
+        if no_vest:
+            violations.append({
+                "type": "PPE", "rule": "NO_VEST", "severity": "MEDIUM",
+                "message": "No Vest Detected", "worker_id": i,
             })
 
     return {
