@@ -8,7 +8,7 @@ NO_HELMET_CLASSES = {"no_helmet", "none"}
 # Ye violation sirf tab banegi jab MODEL ye classes actually return kare
 NO_VEST_CLASSES = {"no_vest", "without_vest", "no-vest"}
 
-HEAD_BAND = (0.0, 0.35)
+HEAD_BAND = (0.0, 0.50)   # crouching workers ke heads bhi cover hon
 VEST_BAND = (0.15, 0.75)
 
 

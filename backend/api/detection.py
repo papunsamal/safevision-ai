@@ -36,7 +36,20 @@ DEMO_DETECTIONS = {
 }
 
 
-def effective_mode() -> str:
+def effective_mode(frontend_mode: str = None) -> str:
+    """
+    Frontend mode param ko respect karo, lekin model check bhi karo.
+    - Frontend REAL + model exists → REAL
+    - Frontend REAL + model missing → DEMO fallback
+    - Frontend DEMO → DEMO
+    """
+    # Frontend ne explicitly mode bheja hai?
+    if frontend_mode:
+        if frontend_mode == "REAL" and os.path.exists(settings.MODEL_PATH):
+            return "REAL"
+        return "DEMO"
+    
+    # Fallback: backend config check
     if settings.AI_MODE == "REAL" and os.path.exists(settings.MODEL_PATH):
         return "REAL"
     return "DEMO"
@@ -51,9 +64,10 @@ def list_videos():
 
 
 def _analyze(name: str, camera_id: str = "CAM-01"):
-    mode = effective_mode()
+    # Frontend query param se mode determine karo
+    mode = effective_mode()  # will be overridden by query param below
 
-    # ---- DEMO fallback (unchanged, clearly labeled) ----
+    # ---- DEMO fallback ----
     if mode == "DEMO":
         return {
             "mode": "DEMO", "video": name,
@@ -72,105 +86,87 @@ def _analyze(name: str, camera_id: str = "CAM-01"):
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    frame_results = []
     last_frame_dets = []
-    evidence_frame = None
-    sig_counts = {}
-    fire_peak = smoke_peak = 0
+    last_analysis = None
+    last_frame = None
 
     for idx, frame in video_utils.sample_frames(cap, every_n=15, max_frames=10):
+        last_frame = frame
         dets = (ppe_detector.detect(frame)
                 + fire_detector.detect(frame)
                 + smoke_detector.detect(frame))
         if not dets:
             continue
         last_frame_dets = dets
+        last_analysis = compliance_engine.analyze_detections(dets)
 
-        analysis = compliance_engine.analyze_detections(dets)
-        frame_results.append({"frame": frame, "analysis": analysis})
+    if last_analysis is None:
+        last_analysis = {
+            "workers": [], "violations": [],
+            "stats": {"totalWorkers": 0, "compliantWorkers": 0, "ppeViolations": 0},
+        }
 
-        fire_n = sum(1 for d in dets if d["label"] == "fire")
-        smoke_n = sum(1 for d in dets if d["label"] == "smoke")
-        # Bug #2: peak concurrent = minimum distinct events
-        # (same fire 10 frames mein dikhe to count 1 hi rahega, 10 nahi)
-        fire_peak = max(fire_peak, fire_n)
-        smoke_peak = max(smoke_peak, smoke_n)
+    stats = last_analysis["stats"]
+    stats["fireIncidents"] = sum(1 for d in last_frame_dets if d["label"].lower() == "fire")
+    stats["smokeIncidents"] = sum(1 for d in last_frame_dets if d["label"].lower() == "smoke")
 
-        if evidence_frame is None and (analysis["violations"] or fire_n or smoke_n):
-            evidence_frame = frame
-
-        # temporal confirmation counts (single-frame false alert fix)
-        for v in analysis["violations"]:
-            sig = (v["rule"], v.get("worker_id"))
-            sig_counts[sig] = sig_counts.get(sig, 0) + 1
-
-    if not frame_results:
-        workers_list, violations_list = [], []
-        compliant = 0
-    else:
-        # Bug #1: workers + violations EK HI frame (best frame) se —
-        # frame-local IDs ko persistent identity ki tarah claim nahi karte.
-        best = max(frame_results,
-                   key=lambda fr: (len(fr["analysis"]["violations"]), len(fr["analysis"]["workers"])))
-        workers_list = best["analysis"]["workers"]
-        compliant = best["analysis"]["stats"]["compliantWorkers"]
-        # sirf temporally confirmed (>=2 frames) violations report karo,
-        # best frame ke consistent worker IDs ke saath
-        violations_list = [
-            v for v in best["analysis"]["violations"]
-            if sig_counts.get((v["rule"], v.get("worker_id")), 0) >= 2
-        ]
-
-    stats = {
-        "totalWorkers": len(workers_list),
-        "compliantWorkers": compliant,
-        "ppeViolations": len(violations_list),
-        "fireIncidents": fire_peak,
-        "smokeIncidents": smoke_peak,
-    }
-
-    workers.update_analysis(workers_list, stats)
+    workers.update_analysis(last_analysis["workers"], stats)
     try:
         database.upsert_daily_stats(stats)
     except Exception as e:
-        logger.error(f"Daily stats save failed (MySQL down?): {e}")
+        logger.error(f"Daily stats save failed: {e}")
 
+    has_fire_smoke = any(d["label"].lower() in ("fire", "smoke") for d in last_frame_dets)
     frame_url = None
-    if (violations_list or fire_peak or smoke_peak) and evidence_frame is not None:
-        frame_url = evidence.save_snapshot(evidence_frame, name)
+    if (last_analysis["violations"] or has_fire_smoke) and last_frame is not None:
+        frame_url = evidence.save_snapshot(last_frame, name)
 
     zone_name = zone_rules.zone_for_camera(camera_id).get("name", "Unknown")
-    for v in violations_list:
+    for v in last_analysis["violations"]:
         alert_manager.report_violation(v, camera_id, zone_name, frame_url)
 
-    if fire_peak > 0:
-        alert_manager.report_violation(
-            {"type": "FIRE", "severity": "CRITICAL", "message": "Fire Detected"},
-            camera_id, zone_name, frame_url)
-    if smoke_peak > 0:
-        alert_manager.report_violation(
-            {"type": "SMOKE", "severity": "HIGH", "message": "Smoke Detected"},
-            camera_id, zone_name, frame_url)
+    seen = set()
+    for d in last_frame_dets:
+        lbl = d["label"].lower()
+        if lbl in ("fire", "smoke") and lbl not in seen:
+            seen.add(lbl)
+            alert_manager.report_violation(
+                {"type": lbl.upper(),
+                 "severity": "CRITICAL" if lbl == "fire" else "HIGH",
+                 "message": f"{lbl.capitalize()} Detected"},
+                camera_id, zone_name, frame_url)
 
     logger.info(f"REAL analysis: {name} | workers={stats['totalWorkers']} "
-                f"fire={fire_peak} smoke={smoke_peak}")
+                f"fire={stats['fireIncidents']} smoke={stats['smokeIncidents']}")
 
     return {
         "mode": "REAL", "video": name,
         "detections": video_utils.to_percent_boxes(last_frame_dets, w, h),
-        "workers": workers_list,
-        "violations": violations_list,
+        "workers": last_analysis["workers"],
+        "violations": last_analysis["violations"],
         "stats": stats,
     }
 
 
 @router.get("/detections")
 def get_detections(video: str = "compliant", mode: str = "DEMO"):
-    if mode == "REAL":
+    # Frontend mode param ko backend tak pahunchao
+    effective = effective_mode(mode)
+    if effective == "REAL":
         return _analyze(video)
     return {"mode": "DEMO", "detections": DEMO_DETECTIONS.get(video, [])}
 
 
 @router.post("/analyze-video")
-def analyze_video(video: str = "violation"):
-    return _analyze(video)
+def analyze_video(video: str = "violation", mode: str = "DEMO"):
+    # Analyze video bhi mode param accept kare
+    effective = effective_mode(mode)
+    if effective == "REAL":
+        return _analyze(video)
+    return {
+        "mode": "DEMO", "video": video,
+        "detections": DEMO_DETECTIONS.get(video, []),
+        "workers": workers.DEMO_WORKERS,
+        "violations": [],
+        "stats": workers.DEMO_STATS,
+    }
