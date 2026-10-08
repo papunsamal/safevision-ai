@@ -62,6 +62,7 @@ def _analyze(name: str, camera_id: str = "CAM-01", resolved_mode: str = None):
         return {
             "mode": "DEMO", "video": name,
             "detections": DEMO_DETECTIONS.get(name, []),
+            "timeline": None,
             "workers": workers.DEMO_WORKERS,
             "violations": [],
             "stats": workers.DEMO_STATS,
@@ -75,10 +76,12 @@ def _analyze(name: str, camera_id: str = "CAM-01", resolved_mode: str = None):
     cap = video_utils.open_video(path)
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total = video_utils.get_frame_count(cap)   # FIX: timeline % ke liye
 
     GRID = 10
     merged = {}
     last_frame_dets = []          # OVERLAY ke liye sirf current frame
+    timeline = []                 # FIX: per-frame synced boxes
 
     # Boolean event counting: continuous event = 1 incident
     fire_incidents = smoke_incidents = 0
@@ -97,6 +100,12 @@ def _analyze(name: str, camera_id: str = "CAM-01", resolved_mode: str = None):
 
         last_frame_dets = dets    # overlay = latest analyzed frame (clean)
         analysis = compliance_engine.analyze_detections(dets)
+
+        # FIX: timeline entry — video time % par matching boxes
+        timeline.append({
+            "t": round(idx / total * 100, 2) if total else 0,
+            "detections": video_utils.to_percent_boxes(dets, w, h),
+        })
 
         # Workers merge (poore video se — STATS ke liye)
         persons = sorted((d for d in dets if d["label"].lower() == "person"),
@@ -186,7 +195,8 @@ def _analyze(name: str, camera_id: str = "CAM-01", resolved_mode: str = None):
 
     return {
         "mode": "REAL", "video": name,
-        "detections": video_utils.to_percent_boxes(last_frame_dets, w, h),  # CLEAN overlay
+        "detections": video_utils.to_percent_boxes(last_frame_dets, w, h),
+        "timeline": timeline,                       # FIX: sync data added
         "workers": workers_list,
         "violations": violations_list,
         "stats": stats,
@@ -198,7 +208,7 @@ def get_detections(video: str = "compliant", mode: str = "DEMO"):
     rm = effective_mode(mode)
     if rm == "REAL":
         return _analyze(video, resolved_mode=rm)
-    return {"mode": "DEMO", "detections": DEMO_DETECTIONS.get(video, [])}
+    return {"mode": "DEMO", "detections": DEMO_DETECTIONS.get(video, []), "timeline": None}
 
 
 @router.post("/analyze-video")
@@ -209,6 +219,7 @@ def analyze_video(video: str = "violation", mode: str = "DEMO"):
     return {
         "mode": "DEMO", "video": video,
         "detections": DEMO_DETECTIONS.get(video, []),
+        "timeline": None,
         "workers": workers.DEMO_WORKERS,
         "violations": [],
         "stats": workers.DEMO_STATS,

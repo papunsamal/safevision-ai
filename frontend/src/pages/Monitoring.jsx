@@ -1,33 +1,50 @@
 import { useEffect, useState } from 'react';
 import CameraFeed from '../components/CameraFeed';
-import { getDetections } from '../services/api';
+import { getDetections, getAlerts } from '../services/api';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 export default function Monitoring({ mode }) {
   const [scenario, setScenario] = useState('compliant');
   const [detections, setDetections] = useState([]);
+  const [timeline, setTimeline] = useState(null);
   const [stats, setStats] = useState(null);
+  const [liveIncidents, setLiveIncidents] = useState([]);
 
   useEffect(() => {
     setDetections([]);
+    setTimeline(null);
     setStats(null);
     if (scenario === 'live') return;
-    // FIX: .catch add kiya — REAL error par UI blank rahega, crash/unhandled-rejection NAHI
     getDetections(mode, scenario)
       .then(res => {
         const list = Array.isArray(res) ? res : (res?.detections ?? []);
         setDetections(list);
+        setTimeline(!Array.isArray(res) ? (res?.timeline ?? null) : null);
         setStats(!Array.isArray(res) ? (res?.stats ?? null) : null);
       })
       .catch(err => {
         console.error('Detection failed:', err);
         setDetections([]);
+        setTimeline(null);
         setStats(null);
       });
   }, [mode, scenario]);
 
-  // Risks: sirf actual violations (none ko hatao — wo sirf "head dikha, helmet nahi" ka status hai)
+  // Live incidents poll (sirf live mode mein)
+  useEffect(() => {
+    if (scenario !== 'live') {
+      setLiveIncidents([]);
+      return;
+    }
+    const poll = setInterval(() => {
+      getAlerts('REAL')
+        .then(a => setLiveIncidents(a.slice(0, 5)))
+        .catch(() => {});
+    }, 3000);
+    return () => clearInterval(poll);
+  }, [scenario]);
+
   const risks = detections.filter(
     d =>
       d.label === 'no_helmet' ||
@@ -35,10 +52,10 @@ export default function Monitoring({ mode }) {
       d.label.toLowerCase() === 'smoke'
   );
 
-  const personsDetected =
-    mode === 'REAL'
-      ? (stats?.totalWorkers ?? '—')
-      : detections.filter(d => d.label.toLowerCase() === 'person').length;
+  // FIX: CURRENT visible persons gin (aggregate 10 nahi)
+  const personsDetected = detections.filter(
+    d => d.label.toLowerCase() === 'person' || d.label === 'Person'
+  ).length;
 
   const videoUrl = mode === 'REAL' && scenario !== 'live' ? `${API}/videos/${scenario}.mp4` : null;
 
@@ -69,6 +86,7 @@ export default function Monitoring({ mode }) {
             title={`Factory Cam — ${scenario}`}
             videoUrl={videoUrl}
             detections={detections}
+            timeline={timeline}
             demo={mode === 'DEMO'}
           />
         )}
@@ -82,9 +100,17 @@ export default function Monitoring({ mode }) {
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
           <p className="text-sm text-slate-400 mb-2">Active Risks</p>
           {scenario === 'live' ? (
-            <p className="text-xs text-slate-500">
-              Boxes live video par hi dikhte hain. Incidents → Alerts + MySQL.
-            </p>
+            <div className="space-y-2">
+              {liveIncidents.length === 0 ? (
+                <p className="text-sm text-emerald-400">No active violations ✓</p>
+              ) : (
+                liveIncidents.map(v => (
+                  <p key={v.id} className="text-sm text-red-400">
+                    ⚠ {v.message} ({v.time})
+                  </p>
+                ))
+              )}
+            </div>
           ) : risks.length === 0 ? (
             <p className="text-sm text-emerald-400">No violations ✓</p>
           ) : (
