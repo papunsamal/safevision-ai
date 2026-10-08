@@ -1,45 +1,38 @@
 import { useEffect, useState } from 'react';
 import CameraFeed from '../components/CameraFeed';
-import { getDetections, getVideos } from '../services/api';
+import { getDetections } from '../services/api';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 export default function Monitoring({ mode }) {
-  const [videos, setVideos] = useState([]);
   const [scenario, setScenario] = useState('compliant');
-  const [result, setResult] = useState({ detections: [], timeline: null });
+  const [detections, setDetections] = useState([]);
+  const [stats, setStats] = useState(null);
 
   useEffect(() => {
-    getVideos().then(setVideos);
-  }, []);
-
-  // REAL: sirf jo videos asal mein maujood hain (404 fix); DEMO: fixed scenarios
-  const options =
-    mode === 'REAL' && videos.length ? videos : ['compliant', 'violation', 'fire_smoke'];
-
-  useEffect(() => {
-    if (scenario !== 'live' && !options.includes(scenario)) setScenario(options[0]);
-  }, [options, scenario]);
-
-  useEffect(() => {
-    if (scenario === 'live') {
-      setResult({ detections: [], timeline: null });
-      return;
-    }
-    getDetections(mode, scenario).then(setResult);
+    setDetections([]);
+    setStats(null);
+    if (scenario === 'live') return;
+    getDetections(mode, scenario).then(res => {
+      if (res && res.detections) {
+        setDetections(res.detections);
+        setStats(res.stats || null);
+      }
+    });
   }, [mode, scenario]);
 
-  const detections = result.detections || [];
-  const timeline = result.timeline || null;
-
-  const persons = detections.filter(d => d.label.toLowerCase() === 'person').length;
+  // Risks: sirf actual violations (none ko hatao — wo sirf "head dikha, helmet nahi" ka status hai)
   const risks = detections.filter(
     d =>
-      d.label.startsWith('no_') ||
-      d.label === 'none' ||
+      d.label === 'no_helmet' ||
       d.label.toLowerCase() === 'fire' ||
       d.label.toLowerCase() === 'smoke'
   );
+
+  const personsDetected =
+    mode === 'REAL'
+      ? (stats?.totalWorkers ?? '—')
+      : detections.filter(d => d.label.toLowerCase() === 'person').length;
 
   const videoUrl = mode === 'REAL' && scenario !== 'live' ? `${API}/videos/${scenario}.mp4` : null;
 
@@ -51,11 +44,9 @@ export default function Monitoring({ mode }) {
           onChange={e => setScenario(e.target.value)}
           className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm"
         >
-          {options.map(v => (
-            <option key={v} value={v}>
-              {v} Video
-            </option>
-          ))}
+          <option value="compliant">Compliant Video</option>
+          <option value="violation">Violation Video</option>
+          <option value="fire_smoke">Fire / Smoke Video</option>
           <option value="live">🔴 Live Webcam (REAL)</option>
         </select>
 
@@ -72,7 +63,6 @@ export default function Monitoring({ mode }) {
             title={`Factory Cam — ${scenario}`}
             videoUrl={videoUrl}
             detections={detections}
-            timeline={timeline}
             demo={mode === 'DEMO'}
           />
         )}
@@ -81,13 +71,13 @@ export default function Monitoring({ mode }) {
       <div className="space-y-4">
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
           <p className="text-sm text-slate-400">Persons Detected</p>
-          <p className="text-2xl font-bold text-slate-100">{scenario === 'live' ? '—' : persons}</p>
+          <p className="text-2xl font-bold text-slate-100">{personsDetected}</p>
         </div>
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
           <p className="text-sm text-slate-400 mb-2">Active Risks</p>
           {scenario === 'live' ? (
             <p className="text-xs text-slate-500">
-              Boxes live video par hi dikhte hain. Incidents → Alerts page + MySQL.
+              Boxes live video par hi dikhte hain. Incidents → Alerts + MySQL.
             </p>
           ) : risks.length === 0 ? (
             <p className="text-sm text-emerald-400">No violations ✓</p>
