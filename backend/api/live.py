@@ -2,7 +2,8 @@ import cv2
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
-from ..ai import ppe_detector, fire_detector, smoke_detector
+# FIX: shared fire/smoke model — ab ppe + fire_smoke_detector, purane fire/smoke detectors nahi
+from ..ai import ppe_detector, fire_smoke_detector
 from ..rules import compliance_engine, zone_rules
 from ..alerts import alert_manager
 from ..utils.logger import get_logger
@@ -44,9 +45,8 @@ def _live_gen(cap):
         frame_no += 1
 
         if frame_no % 10 == 0:
-            dets = (ppe_detector.detect(frame)
-                    + fire_detector.detect(frame)
-                    + smoke_detector.detect(frame))
+            # FIX: ek hi inference — fire + smoke dono (shared model)
+            dets = ppe_detector.detect(frame) + fire_smoke_detector.detect_all(frame)
             last_dets = dets
 
             # Temporal confirmation: 2 consecutive processed frames par hi PPE incident

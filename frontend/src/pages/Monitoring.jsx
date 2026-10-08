@@ -13,11 +13,18 @@ export default function Monitoring({ mode }) {
     setDetections([]);
     setStats(null);
     if (scenario === 'live') return;
-    getDetections(mode, scenario).then(res => {
-      const list = Array.isArray(res) ? res : (res?.detections ?? []);
-      setDetections(list);
-      setStats(!Array.isArray(res) ? (res?.stats ?? null) : null);
-    });
+    // FIX: .catch add kiya — REAL error par UI blank rahega, crash/unhandled-rejection NAHI
+    getDetections(mode, scenario)
+      .then(res => {
+        const list = Array.isArray(res) ? res : (res?.detections ?? []);
+        setDetections(list);
+        setStats(!Array.isArray(res) ? (res?.stats ?? null) : null);
+      })
+      .catch(err => {
+        console.error('Detection failed:', err);
+        setDetections([]);
+        setStats(null);
+      });
   }, [mode, scenario]);
 
   // Risks: sirf actual violations (none ko hatao — wo sirf "head dikha, helmet nahi" ka status hai)

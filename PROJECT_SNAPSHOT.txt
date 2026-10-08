@@ -1,0 +1,2355 @@
+﻿===== FILE: .env.example =====
+AI_MODE=DEMO
+MODEL_PATH=./models/ppe_model.pt
+FIRE_SMOKE_MODEL_PATH=./models/fire_smoke_model.pt
+CONFIDENCE_THRESHOLD=0.5
+
+MYSQL_HOST=localhost
+MYSQL_PORT=3306
+MYSQL_USER=root
+MYSQL_PASSWORD=your_password_here
+MYSQL_DB=safevision
+
+===== FILE: backend\__init__.py =====
+
+
+===== FILE: backend\ai\__init__.py =====
+
+
+===== FILE: backend\ai\fire_detector.py =====
+import os
+from ..config import settings
+
+_model = None
+
+
+def _load():
+    global _model
+    if _model is None:
+        if os.path.exists(settings.FIRE_SMOKE_MODEL_PATH):
+            from ultralytics import YOLO
+            _model = YOLO(settings.FIRE_SMOKE_MODEL_PATH)
+        else:
+            _model = False  # model nahi -> koi detection nahi (no fake AI)
+    return _model
+
+
+def detect(frame):
+    model = _load()
+    if not model:
+        return []
+    out = []
+    for r in model(frame, conf=settings.CONFIDENCE_THRESHOLD, verbose=False):
+        for box in r.boxes:
+            name = model.names[int(box.cls[0])]
+            if "fire" in name.lower():
+                out.append({"label": "fire", "confidence": round(float(box.conf[0]), 2),
+                            "bbox": [float(v) for v in box.xyxy[0]]})
+    return out
+
+===== FILE: backend\ai\fire_smoke_detector.py =====
+import os
+from ..config import settings
+from ..utils.logger import get_logger
+
+logger = get_logger("fire_smoke_detector")
+
+_model = None
+
+
+def _load():
+    global _model
+    if _model is None:
+        if os.path.exists(settings.FIRE_SMOKE_MODEL_PATH):
+            from ultralytics import YOLO
+            _model = YOLO(settings.FIRE_SMOKE_MODEL_PATH)
+            logger.info("Fire/Smoke model loaded (shared instance)")
+        else:
+            _model = False
+            logger.warning("Fire/Smoke model NOT found -> detection disabled")
+    return _model
+
+
+def detect_all(frame):
+    """Single inference, returns both fire + smoke detections."""
+    model = _load()
+    if not model:
+        return []
+    dets = []
+    for r in model(frame, conf=settings.CONFIDENCE_THRESHOLD, verbose=False):
+        for box in r.boxes:
+            name = str(model.names[int(box.cls[0])]).lower()
+            if "fire" in name or "smoke" in name:
+                dets.append({
+                    "label": "fire" if "fire" in name else "smoke",
+                    "confidence": round(float(box.conf[0]), 2),
+                    "bbox": [float(v) for v in box.xyxy[0]],
+                })
+    return dets
+
+===== FILE: backend\ai\ppe_detector.py =====
+import os
+from ..config import settings
+from ..utils.logger import get_logger
+
+logger = get_logger("ppe_detector")
+
+_model = None
+_model_classes = []
+
+
+def _load():
+    global _model, _model_classes
+    if _model is not None:
+        return _model
+    try:
+        from ultralytics import YOLO
+        if os.path.exists(settings.MODEL_PATH):
+            _model = YOLO(settings.MODEL_PATH)
+            _model_classes = list(_model.names.values())
+            logger.info(f"Custom PPE model loaded | classes={_model_classes}")
+        else:
+            # Generic YOLO sirf 'person' jaanta hai (COCO) — helmet/vest NAHI
+            _model = YOLO("yolov8n.pt")
+            _model_classes = ["person"]
+            logger.info("Custom PPE model NOT found -> generic YOLO (person only)")
+    except Exception as e:
+        logger.error(f"PPE model load failed: {e}")
+        _model = False
+    return _model
+
+
+def supported_classes():
+    _load()
+    return _model_classes
+
+
+def detect(frame):
+    model = _load()
+    if not model:
+        return []
+    results = model(frame, conf=settings.CONFIDENCE_THRESHOLD, verbose=False)
+    dets = []
+    for r in results:
+        for box in r.boxes:
+            name = model.names[int(box.cls[0])]
+            if name in _model_classes:
+                dets.append({
+                    "label": name,
+                    "confidence": round(float(box.conf[0]), 2),
+                    "bbox": [float(v) for v in box.xyxy[0]],
+                })
+    return dets
+
+===== FILE: backend\ai\smoke_detector.py =====
+import os
+from ..config import settings
+
+_model = None
+
+
+def _load():
+    global _model
+    if _model is None:
+        if os.path.exists(settings.FIRE_SMOKE_MODEL_PATH):
+            from ultralytics import YOLO
+            _model = YOLO(settings.FIRE_SMOKE_MODEL_PATH)
+        else:
+            _model = False
+    return _model
+
+
+def detect(frame):
+    model = _load()
+    if not model:
+        return []
+    out = []
+    for r in model(frame, conf=settings.CONFIDENCE_THRESHOLD, verbose=False):
+        for box in r.boxes:
+            name = model.names[int(box.cls[0])]
+            if "smoke" in name.lower():
+                out.append({"label": "smoke", "confidence": round(float(box.conf[0]), 2),
+                            "bbox": [float(v) for v in box.xyxy[0]]})
+    return out
+
+===== FILE: backend\alerts\__init__.py =====
+
+
+===== FILE: backend\alerts\alert_manager.py =====
+import time
+
+from ..rules import violation_tracker
+from ..database import database
+from ..utils.logger import get_logger
+
+logger = get_logger("alert_manager")
+
+COOLDOWN_SECONDS = 60
+_last_seen = {}
+
+
+def _cooldown_key(violation, camera_id, zone_name):
+    """rule/type + camera + zone + worker — alag workers ab ek-dusre ko suppress nahi karenge."""
+    return f"{violation.get('rule', violation.get('type'))}|{camera_id}|{zone_name}|{violation.get('worker_id')}"
+
+
+def report_violation(violation, camera_id, zone_name, frame_url=None):
+    key = _cooldown_key(violation, camera_id, zone_name)
+    now = time.time()
+
+    last = _last_seen.get(key)
+    if last is None:
+        last = database.get_cooldown(key)   # restart-safe (MySQL-backed)
+
+    if last is not None and now - last < COOLDOWN_SECONDS:
+        return None
+
+    _last_seen[key] = now
+    database.set_cooldown(key, now)
+    return violation_tracker.record_incident(violation, camera_id, zone_name, frame_url)
+
+===== FILE: backend\api\__init__.py =====
+
+
+===== FILE: backend\api\alerts.py =====
+from fastapi import APIRouter
+
+from ..database import database
+from ..utils.logger import get_logger
+
+logger = get_logger("alerts")
+
+router = APIRouter(prefix="/api", tags=["alerts"])
+
+DEMO_ALERTS = [
+    {"id": 1, "type": "PPE", "severity": "HIGH", "message": "No Helmet Detected", "camera": "CAM-01", "zone": "Production Area", "time": "10:41"},
+    {"id": 2, "type": "FIRE", "severity": "CRITICAL", "message": "Fire Detected", "camera": "CAM-02", "zone": "Warehouse", "time": "10:38"},
+    {"id": 3, "type": "SMOKE", "severity": "HIGH", "message": "Smoke Detected", "camera": "CAM-03", "zone": "Boiler Area", "time": "10:31"},
+]
+
+DEMO_REPORTS = {
+    "complianceTrend": [
+        {"day": "Mon", "value": 72}, {"day": "Tue", "value": 75}, {"day": "Wed", "value": 71},
+        {"day": "Thu", "value": 80}, {"day": "Fri", "value": 84}, {"day": "Sat", "value": 82},
+        {"day": "Sun", "value": 88},
+    ],
+    "incidentTrend": [
+        {"day": "Mon", "ppe": 4, "fire": 1, "smoke": 2}, {"day": "Tue", "ppe": 3, "fire": 0, "smoke": 1},
+        {"day": "Wed", "ppe": 6, "fire": 2, "smoke": 2}, {"day": "Thu", "ppe": 2, "fire": 0, "smoke": 1},
+        {"day": "Fri", "ppe": 5, "fire": 1, "smoke": 3}, {"day": "Sat", "ppe": 3, "fire": 0, "smoke": 0},
+        {"day": "Sun", "ppe": 1, "fire": 0, "smoke": 1},
+    ],
+}
+
+
+@router.get("/alerts")
+def get_alerts(mode: str = "REAL"):
+    if mode == "DEMO":
+        return DEMO_ALERTS
+    try:
+        return database.fetch_incidents(50)
+    except Exception as e:
+        logger.error(f"Alerts fetch failed (MySQL down?): {e}")
+        return []
+
+
+@router.get("/reports")
+def get_reports(mode: str = "REAL"):
+    if mode == "DEMO":
+        return DEMO_REPORTS
+    try:
+        return database.fetch_trends()
+    except Exception as e:
+        logger.error(f"Reports fetch failed (MySQL down?): {e}")
+        return {"complianceTrend": [], "incidentTrend": []}
+
+===== FILE: backend\api\cameras.py =====
+from fastapi import APIRouter
+
+router = APIRouter(prefix="/api", tags=["cameras"])
+
+# DEMO-ONLY: static sample list — real camera management future scope.
+DEMO_CAMERAS = [
+    {"id": "CAM-01", "name": "Factory-Cam-01", "zone": "Production Area", "status": "DEMO", "demo": True},
+    {"id": "CAM-02", "name": "Factory-Cam-02", "zone": "Warehouse", "status": "DEMO", "demo": True},
+    {"id": "CAM-03", "name": "Factory-Cam-03", "zone": "Boiler Area", "status": "DEMO", "demo": True},
+    {"id": "CAM-04", "name": "Factory-Cam-04", "zone": "Entry Gate", "status": "DEMO", "demo": True},
+]
+
+
+@router.get("/cameras")
+def get_cameras():
+    """Sample camera list (demo). Fake ONLINE/OFFLINE state ab nahi dikhti."""
+    return DEMO_CAMERAS
+
+===== FILE: backend\api\detection.py =====
+import os
+import cv2
+from fastapi import APIRouter, HTTPException
+
+from ..config import settings
+from ..utils import video as video_utils
+from ..utils import evidence
+from ..utils.logger import get_logger
+from ..ai import ppe_detector, fire_smoke_detector
+from ..rules import compliance_engine, zone_rules
+from ..alerts import alert_manager
+from ..database import database
+from . import workers
+
+router = APIRouter(prefix="/api", tags=["detection"])
+logger = get_logger("detection")
+
+NO_HEAD_CLASSES = {"no_helmet", "none"}
+
+DEMO_DETECTIONS = {
+    "compliant": [
+        {"label": "person", "confidence": 0.96, "x": 10, "y": 15, "w": 22, "h": 70},
+        {"label": "helmet", "confidence": 0.93, "x": 12, "y": 15, "w": 8, "h": 10},
+        {"label": "vest", "confidence": 0.91, "x": 12, "y": 35, "w": 16, "h": 25},
+        {"label": "person", "confidence": 0.94, "x": 55, "y": 20, "w": 22, "h": 68},
+        {"label": "helmet", "confidence": 0.9, "x": 57, "y": 20, "w": 8, "h": 10},
+    ],
+    "violation": [
+        {"label": "person", "confidence": 0.95, "x": 15, "y": 18, "w": 22, "h": 68},
+        {"label": "no_helmet", "confidence": 0.89, "x": 17, "y": 18, "w": 8, "h": 10},
+        {"label": "person", "confidence": 0.93, "x": 60, "y": 22, "w": 20, "h": 66},
+        {"label": "helmet", "confidence": 0.92, "x": 62, "y": 22, "w": 8, "h": 10},
+    ],
+    "fire_smoke": [
+        {"label": "fire", "confidence": 0.91, "x": 40, "y": 55, "w": 18, "h": 25},
+        {"label": "smoke", "confidence": 0.87, "x": 38, "y": 20, "w": 26, "h": 35},
+    ],
+}
+
+
+def effective_mode(frontend_mode: str = None) -> str:
+    if frontend_mode:
+        if frontend_mode == "REAL" and os.path.exists(settings.MODEL_PATH):
+            return "REAL"
+        return "DEMO"
+    if settings.AI_MODE == "REAL" and os.path.exists(settings.MODEL_PATH):
+        return "REAL"
+    return "DEMO"
+
+
+@router.get("/videos")
+def list_videos():
+    if os.path.isdir(settings.VIDEOS_DIR):
+        return sorted(f[:-4] for f in os.listdir(settings.VIDEOS_DIR)
+                      if f.lower().endswith(".mp4"))
+    return []
+
+
+def _analyze(name: str, camera_id: str = "CAM-01", resolved_mode: str = None):
+    # ---- DEMO fallback (clearly labeled — no fake AI) ----
+    if (resolved_mode or effective_mode()) == "DEMO":
+        return {
+            "mode": "DEMO", "video": name,
+            "detections": DEMO_DETECTIONS.get(name, []),
+            "workers": workers.DEMO_WORKERS,
+            "violations": [],
+            "stats": workers.DEMO_STATS,
+        }
+
+    # ---- REAL pipeline ----
+    path = os.path.join(settings.VIDEOS_DIR, f"{name}.mp4")
+    if not os.path.exists(path):
+        raise HTTPException(404, f"Video not found: videos/{name}.mp4")
+
+    cap = video_utils.open_video(path)
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    GRID = 10
+    merged = {}
+    last_frame_dets = []          # OVERLAY ke liye sirf current frame
+
+    # Boolean event counting: continuous event = 1 incident
+    fire_incidents = smoke_incidents = 0
+    fire_active = smoke_active = False
+
+    evidence_frame = None
+    evidence_score = -1
+
+    for idx, frame in video_utils.sample_frames(cap, every_n=15, max_frames=10):
+        dets = ppe_detector.detect(frame) + fire_smoke_detector.detect_all(frame)
+
+        if not dets:
+            fire_active = False
+            smoke_active = False
+            continue
+
+        last_frame_dets = dets    # overlay = latest analyzed frame (clean)
+        analysis = compliance_engine.analyze_detections(dets)
+
+        # Workers merge (poore video se — STATS ke liye)
+        persons = sorted((d for d in dets if d["label"].lower() == "person"),
+                         key=lambda d: d["bbox"][0])
+        for wk, p in zip(analysis["workers"], persons):
+            b = p["bbox"]
+            cx = ((b[0] + b[2]) / 2) / w * 100
+            cy = ((b[1] + b[3]) / 2) / h * 100
+            key = (int(cx // GRID), int(cy // GRID))
+            m = merged.setdefault(key, {"x": cx, "helmet": False, "vest": False,
+                                        "none": False, "no_vest": False,
+                                        "none_count": 0, "no_vest_count": 0})
+            m["helmet"] = m["helmet"] or wk["helmet"]
+            m["vest"] = m["vest"] or wk["vest"]
+            m["no_vest"] = m["no_vest"] or wk.get("no_vest", False)
+            if wk["head_status"] in NO_HEAD_CLASSES:
+                m["none"] = True
+                m["none_count"] += 1
+            if wk.get("no_vest"):
+                m["no_vest_count"] += 1
+
+        # Continuous event = 1 incident
+        has_fire = any(d["label"] == "fire" for d in dets)
+        has_smoke = any(d["label"] == "smoke" for d in dets)
+        if has_fire and not fire_active:
+            fire_incidents += 1
+            fire_active = True
+        elif not has_fire:
+            fire_active = False
+        if has_smoke and not smoke_active:
+            smoke_incidents += 1
+            smoke_active = True
+        elif not has_smoke:
+            smoke_active = False
+
+        score = len(analysis["violations"]) + (1 if has_fire else 0) + (1 if has_smoke else 0)
+        if score > evidence_score:
+            evidence_score = score
+            evidence_frame = frame
+
+    workers_list, violations_list = [], []
+    for i, (_, m) in enumerate(sorted(merged.items(), key=lambda kv: kv[1]["x"]), start=1):
+        head_status = "helmet" if m["helmet"] else ("none" if m["none"] else None)
+        workers_list.append({"id": i, "helmet": m["helmet"], "vest": m["vest"],
+                             "no_vest": m["no_vest"], "head_status": head_status})
+        if m["none"] and m["none_count"] >= 2:
+            violations_list.append({"type": "PPE", "rule": "NO_HELMET", "severity": "HIGH",
+                                    "message": "No Helmet Detected", "worker_id": i})
+        if m["no_vest"] and m["no_vest_count"] >= 2:
+            violations_list.append({"type": "PPE", "rule": "NO_VEST", "severity": "MEDIUM",
+                                    "message": "No Vest Detected", "worker_id": i})
+
+    compliant = sum(1 for wk in workers_list if wk["helmet"] and not wk["no_vest"])
+
+    stats = {
+        "totalWorkers": len(workers_list),
+        "compliantWorkers": compliant,
+        "ppeViolations": len(violations_list),
+        "fireIncidents": fire_incidents,
+        "smokeIncidents": smoke_incidents,
+    }
+
+    workers.update_analysis(workers_list, stats)
+    try:
+        database.upsert_daily_stats(stats)
+    except Exception as e:
+        logger.error(f"Daily stats save failed (MySQL down?): {e}")
+
+    frame_url = None
+    if (violations_list or fire_incidents or smoke_incidents) and evidence_frame is not None:
+        frame_url = evidence.save_snapshot(evidence_frame, name)
+
+    zone_name = zone_rules.zone_for_camera(camera_id).get("name", "Unknown")
+    for v in violations_list:
+        alert_manager.report_violation(v, camera_id, zone_name, frame_url)
+    if fire_incidents > 0:
+        alert_manager.report_violation(
+            {"type": "FIRE", "severity": "CRITICAL", "message": "Fire Detected"},
+            camera_id, zone_name, frame_url)
+    if smoke_incidents > 0:
+        alert_manager.report_violation(
+            {"type": "SMOKE", "severity": "HIGH", "message": "Smoke Detected"},
+            camera_id, zone_name, frame_url)
+
+    logger.info(f"REAL analysis: {name} | workers={stats['totalWorkers']} "
+                f"fire={fire_incidents} smoke={smoke_incidents}")
+
+    return {
+        "mode": "REAL", "video": name,
+        "detections": video_utils.to_percent_boxes(last_frame_dets, w, h),  # CLEAN overlay
+        "workers": workers_list,
+        "violations": violations_list,
+        "stats": stats,
+    }
+
+
+@router.get("/detections")
+def get_detections(video: str = "compliant", mode: str = "DEMO"):
+    rm = effective_mode(mode)
+    if rm == "REAL":
+        return _analyze(video, resolved_mode=rm)
+    return {"mode": "DEMO", "detections": DEMO_DETECTIONS.get(video, [])}
+
+
+@router.post("/analyze-video")
+def analyze_video(video: str = "violation", mode: str = "DEMO"):
+    rm = effective_mode(mode)
+    if rm == "REAL":
+        return _analyze(video, resolved_mode=rm)
+    return {
+        "mode": "DEMO", "video": video,
+        "detections": DEMO_DETECTIONS.get(video, []),
+        "workers": workers.DEMO_WORKERS,
+        "violations": [],
+        "stats": workers.DEMO_STATS,
+    }
+
+===== FILE: backend\api\fire_detector.py =====
+from . import fire_smoke_detector
+
+
+def detect(frame):
+    """Shared model se fire-only detections (output format same)."""
+    return [d for d in fire_smoke_detector.detect_all(frame) if d["label"] == "fire"]
+
+===== FILE: backend\api\fire_smoke_detector.py =====
+import os
+from ..config import settings
+from ..utils.logger import get_logger
+
+logger = get_logger("fire_smoke_detector")
+
+_model = None
+
+
+def _load():
+    """Model memory mein SIRF EK BAAR load hota hai."""
+    global _model
+    if _model is None:
+        if os.path.exists(settings.FIRE_SMOKE_MODEL_PATH):
+            from ultralytics import YOLO
+            _model = YOLO(settings.FIRE_SMOKE_MODEL_PATH)
+            logger.info("Fire/Smoke model loaded (shared instance)")
+        else:
+            _model = False
+            logger.warning("Fire/Smoke model NOT found -> detection disabled (no fake AI)")
+    return _model
+
+
+def detect_all(frame):
+    """Ek inference mein fire + smoke dono classes."""
+    model = _load()
+    if not model:
+        return []
+    dets = []
+    for r in model(frame, conf=settings.CONFIDENCE_THRESHOLD, verbose=False):
+        for box in r.boxes:
+            name = str(model.names[int(box.cls[0])]).lower()
+            if "fire" in name or "smoke" in name:
+                dets.append({
+                    "label": "fire" if "fire" in name else "smoke",
+                    "confidence": round(float(box.conf[0]), 2),
+                    "bbox": [float(v) for v in box.xyxy[0]],
+                })
+    return dets
+
+===== FILE: backend\api\live.py =====
+import cv2
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
+
+from ..ai import ppe_detector, fire_detector, smoke_detector
+from ..rules import compliance_engine, zone_rules
+from ..alerts import alert_manager
+from ..utils.logger import get_logger
+
+router = APIRouter(prefix="/api", tags=["live"])
+logger = get_logger("live")
+
+CAMERA_ID = "CAM-LIVE"   # zones.json mein "Live Monitoring" (Z5) se mapped
+
+COLORS = {
+    "fire": (0, 0, 255), "smoke": (0, 165, 255),
+    "no_helmet": (0, 0, 255), "none": (0, 0, 255),
+    "helmet": (0, 255, 0), "vest": (0, 255, 0),
+    "Person": (255, 255, 0),
+}
+
+
+def _draw(frame, dets):
+    for d in dets:
+        x1, y1, x2, y2 = [int(v) for v in d["bbox"]]
+        color = COLORS.get(d["label"], (255, 255, 255))
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+        cv2.putText(frame, f"{d['label']} {int(d['confidence'] * 100)}%",
+                    (x1, max(12, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+    return frame
+
+
+def _live_gen(cap):
+    logger.info("LIVE stream started (webcam)")
+    zone_name = zone_rules.zone_for_camera(CAMERA_ID).get("name", "Unknown")
+    frame_no = 0
+    last_dets = []
+    pending = {}
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        frame_no += 1
+
+        if frame_no % 10 == 0:
+            dets = (ppe_detector.detect(frame)
+                    + fire_detector.detect(frame)
+                    + smoke_detector.detect(frame))
+            last_dets = dets
+
+            # Temporal confirmation: 2 consecutive processed frames par hi PPE incident
+            analysis = compliance_engine.analyze_detections(dets)
+            new_pending = {}
+            for v in analysis["violations"]:
+                sig = (v["rule"], v.get("worker_id"))
+                c = pending.get(sig, 0) + 1
+                new_pending[sig] = c
+                if c >= 2:
+                    alert_manager.report_violation(v, CAMERA_ID, zone_name)
+            pending = new_pending
+
+            for lbl in ("fire", "smoke"):
+                if any(d["label"] == lbl for d in dets):
+                    alert_manager.report_violation(
+                        {"type": lbl.upper(),
+                         "severity": "CRITICAL" if lbl == "fire" else "HIGH",
+                         "message": f"{lbl.capitalize()} Detected"},
+                        CAMERA_ID, zone_name)
+
+        # Flicker fix: HAR frame par last detections draw karo
+        frame = _draw(frame, last_dets)
+
+        ok, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+        if ok:
+            yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
+                   + jpeg.tobytes() + b"\r\n")
+    cap.release()
+
+
+@router.get("/live/stream")
+def live_stream(camera: int = 0):
+    cap = cv2.VideoCapture(camera)
+    if not cap.isOpened():
+        cap.release()
+        logger.error(f"Camera {camera} nahi khuli")
+        raise HTTPException(503, f"Camera {camera} not available")
+    return StreamingResponse(_live_gen(cap),
+                             media_type="multipart/x-mixed-replace; boundary=frame")
+
+===== FILE: backend\api\ppe_detector.py =====
+import os
+
+from ..config import settings
+from ..utils.logger import get_logger
+
+logger = get_logger("ppe_detector")
+
+_model = None
+_model_classes = []
+
+
+def _load():
+    global _model, _model_classes
+    if _model is not None:
+        return _model
+    try:
+        from ultralytics import YOLO
+        if os.path.exists(settings.MODEL_PATH):
+            _model = YOLO(settings.MODEL_PATH)
+            _model_classes = list(_model.names.values())
+            logger.info(f"Custom PPE model loaded | classes={_model_classes}")
+        else:
+            # HONESTY: generic YOLO sirf 'person' jaanta hai — use PPE detector
+            # kehna fake claim hota. Isliye PPE detection disabled.
+            _model = False
+            _model_classes = []
+            logger.warning("Custom PPE model NOT found -> PPE detection disabled (no fake AI)")
+    except Exception as e:
+        logger.error(f"PPE model load failed: {e}")
+        _model = False
+    return _model
+
+
+def supported_classes():
+    _load()
+    return _model_classes
+
+
+def detect(frame):
+    model = _load()
+    if not model:
+        return []
+    results = model(frame, conf=settings.CONFIDENCE_THRESHOLD, verbose=False)
+    dets = []
+    for r in results:
+        for box in r.boxes:
+            name = model.names[int(box.cls[0])]
+            if name in _model_classes:
+                dets.append({
+                    "label": name,
+                    "confidence": round(float(box.conf[0]), 2),
+                    "bbox": [float(v) for v in box.xyxy[0]],
+                })
+    return dets
+
+===== FILE: backend\api\smoke_detector.py =====
+from . import fire_smoke_detector
+
+
+def detect(frame):
+    """Shared model se smoke-only detections (output format same)."""
+    return [d for d in fire_smoke_detector.detect_all(frame) if d["label"] == "smoke"]
+
+===== FILE: backend\api\workers.py =====
+from fastapi import APIRouter
+
+router = APIRouter(prefix="/api", tags=["workers"])
+
+DEMO_STATS = {"totalWorkers": 25, "compliantWorkers": 22, "ppeViolations": 3,
+              "fireIncidents": 1, "smokeIncidents": 2}
+
+DEMO_WORKERS = [
+    {"id": 1, "helmet": True, "vest": True, "gloves": True},
+    {"id": 2, "helmet": False, "vest": True},
+    {"id": 3, "helmet": True, "vest": False},
+    {"id": 4, "helmet": True, "vest": True},
+]
+
+# REAL mode: zero se shuru (koi fake data nahi) — real analysis ke baad update hota hai
+EMPTY_STATS = {"totalWorkers": 0, "compliantWorkers": 0, "ppeViolations": 0,
+               "fireIncidents": 0, "smokeIncidents": 0}
+
+latest_analysis = {"workers": [], "stats": EMPTY_STATS}
+
+
+def update_analysis(workers, stats):
+    """Rules engine ka fresh analysis yahan save hota hai."""
+    global latest_analysis
+    latest_analysis = {"workers": workers, "stats": stats}
+
+
+@router.get("/stats")
+def get_stats(mode: str = "REAL"):
+    if mode == "DEMO":
+        return DEMO_STATS
+    return latest_analysis["stats"]
+
+
+@router.get("/workers")
+def get_workers(mode: str = "REAL"):
+    if mode == "DEMO":
+        return DEMO_WORKERS
+    return latest_analysis["workers"]
+
+===== FILE: backend\config.py =====
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+class Settings:
+    AI_MODE = os.getenv("AI_MODE", "DEMO")
+    MODEL_PATH = os.getenv("MODEL_PATH", os.path.join(BASE_DIR, "models", "ppe_model.pt"))
+    FIRE_SMOKE_MODEL_PATH = os.getenv("FIRE_SMOKE_MODEL_PATH", os.path.join(BASE_DIR, "models", "fire_smoke_model.pt"))
+    CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.5"))
+    VIDEOS_DIR = os.path.join(BASE_DIR, "videos")
+    EVIDENCE_DIR = os.path.join(BASE_DIR, "evidence", "alerts")
+    CONFIGS_DIR = os.path.join(BASE_DIR, "configs")
+
+    # MySQL 8.0
+    MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
+    MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
+    MYSQL_USER = os.getenv("MYSQL_USER", "root")
+    MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
+    MYSQL_DB = os.getenv("MYSQL_DB", "safevision")
+
+
+settings = Settings()
+
+===== FILE: backend\database\__init__.py =====
+
+
+===== FILE: backend\database\database.py =====
+import re
+
+import mysql.connector
+
+from ..config import settings
+from ..utils.logger import get_logger
+
+logger = get_logger("database")
+
+
+def _safe_db_name() -> str:
+    """SQL-injection safe: sirf alphanumeric + underscore allowed."""
+    if not re.fullmatch(r"[A-Za-z0-9_]+", settings.MYSQL_DB):
+        raise ValueError(f"Unsafe MySQL database name: {settings.MYSQL_DB}")
+    return settings.MYSQL_DB
+
+
+def get_conn():
+    return mysql.connector.connect(
+        host=settings.MYSQL_HOST,
+        port=settings.MYSQL_PORT,
+        user=settings.MYSQL_USER,
+        password=settings.MYSQL_PASSWORD,
+        database=_safe_db_name(),
+    )
+
+
+def init_db():
+    from . import models
+    name = _safe_db_name()
+    conn = mysql.connector.connect(
+        host=settings.MYSQL_HOST,
+        port=settings.MYSQL_PORT,
+        user=settings.MYSQL_USER,
+        password=settings.MYSQL_PASSWORD,
+    )
+    cur = conn.cursor()
+    cur.execute(f"CREATE DATABASE IF NOT EXISTS `{name}`")
+    cur.execute(f"USE `{name}`")
+    cur.execute(models.INCIDENTS_TABLE)
+    cur.execute(models.DAILY_STATS_TABLE)
+    cur.execute(models.ALERT_COOLDOWNS_TABLE)
+    conn.commit()
+    cur.close()
+    conn.close()
+    logger.info(f"MySQL database ready: {name}")
+
+
+def insert_incident(incident: dict, frame_url: str = None) -> bool:
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO incidents (type, severity, message, camera, zone, worker_id, frame_url) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s)",
+            (incident.get("type"), incident.get("severity"), incident.get("message"),
+             incident.get("camera"), incident.get("zone"), incident.get("worker_id"), frame_url),
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+        return True
+    except Exception as e:
+        logger.error(f"insert_incident failed: {e}")
+        return False
+
+
+def fetch_incidents(limit: int = 50):
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, type, severity, message, camera, zone, frame_url, created_at "
+            "FROM incidents ORDER BY id DESC LIMIT %s",
+            (limit,),
+        )
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return [
+            {
+                "id": i, "type": t, "severity": sev, "message": msg,
+                "camera": cam, "zone": zone, "frame_url": furl,
+                "time": str(created)[11:16] if created else "—",
+            }
+            for (i, t, sev, msg, cam, zone, furl, created) in rows
+        ]
+    except Exception as e:
+        logger.error(f"fetch_incidents failed: {e}")
+        return []
+
+
+def upsert_daily_stats(stats: dict) -> bool:
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO daily_stats (stat_date, total_workers, compliant_workers, "
+            "ppe_violations, fire_incidents, smoke_incidents) "
+            "VALUES (CURDATE(),%s,%s,%s,%s,%s) "
+            "ON DUPLICATE KEY UPDATE total_workers=VALUES(total_workers), "
+            "compliant_workers=VALUES(compliant_workers), ppe_violations=VALUES(ppe_violations), "
+            "fire_incidents=VALUES(fire_incidents), smoke_incidents=VALUES(smoke_incidents)",
+            (stats.get("totalWorkers", 0), stats.get("compliantWorkers", 0),
+             stats.get("ppeViolations", 0), stats.get("fireIncidents", 0),
+             stats.get("smokeIncidents", 0)),
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+        return True
+    except Exception as e:
+        logger.error(f"upsert_daily_stats failed: {e}")
+        return False
+
+
+def fetch_trends(days: int = 7):
+    """DONO trends same date-range (last N days) use karte hain."""
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT stat_date, total_workers, compliant_workers FROM daily_stats "
+            "WHERE stat_date >= DATE_SUB(CURDATE(), INTERVAL %s DAY) ORDER BY stat_date",
+            (days,),
+        )
+        comp_rows = cur.fetchall()
+        cur.execute(
+            "SELECT DATE(created_at), SUM(type='PPE'), SUM(type='FIRE'), SUM(type='SMOKE') "
+            "FROM incidents WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL %s DAY) "
+            "GROUP BY DATE(created_at) ORDER BY DATE(created_at)",
+            (days,),
+        )
+        inc_rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return {
+            "complianceTrend": [
+                {"day": d.strftime("%a"), "value": round(c / t * 100) if t else 0}
+                for (d, t, c) in comp_rows
+            ],
+            "incidentTrend": [
+                {"day": d.strftime("%a"), "ppe": int(p or 0), "fire": int(f or 0), "smoke": int(s or 0)}
+                for (d, p, f, s) in inc_rows
+            ],
+        }
+    except Exception as e:
+        logger.error(f"fetch_trends failed: {e}")
+        return {"complianceTrend": [], "incidentTrend": []}
+
+
+def get_cooldown(key: str):
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT last_seen FROM alert_cooldowns WHERE ckey=%s", (key,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        return float(row[0]) if row else None
+    except Exception as e:
+        logger.error(f"get_cooldown failed: {e}")
+        return None
+
+
+def set_cooldown(key: str, ts: float) -> None:
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO alert_cooldowns (ckey, last_seen) VALUES (%s,%s) "
+            "ON DUPLICATE KEY UPDATE last_seen=VALUES(last_seen)",
+            (key, ts),
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        logger.error(f"set_cooldown failed: {e}")
+
+===== FILE: backend\database\models.py =====
+# MySQL schema — 3 tables
+
+INCIDENTS_TABLE = """
+CREATE TABLE IF NOT EXISTS incidents (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    type VARCHAR(50) NOT NULL,
+    severity VARCHAR(20) NOT NULL,
+    message VARCHAR(255) NOT NULL,
+    camera VARCHAR(50),
+    zone VARCHAR(100),
+    worker_id INT,
+    frame_url VARCHAR(255),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_type (type),
+    INDEX idx_created (created_at)
+) ENGINE=InnoDB
+"""
+
+DAILY_STATS_TABLE = """
+CREATE TABLE IF NOT EXISTS daily_stats (
+    stat_date DATE PRIMARY KEY,
+    total_workers INT DEFAULT 0,
+    compliant_workers INT DEFAULT 0,
+    ppe_violations INT DEFAULT 0,
+    fire_incidents INT DEFAULT 0,
+    smoke_incidents INT DEFAULT 0,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB
+"""
+
+ALERT_COOLDOWNS_TABLE = """
+CREATE TABLE IF NOT EXISTS alert_cooldowns (
+    ckey VARCHAR(191) PRIMARY KEY,
+    last_seen DOUBLE NOT NULL
+) ENGINE=InnoDB
+"""
+
+===== FILE: backend\main.py =====
+import os
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+
+from .config import settings
+from .utils.logger import get_logger
+from .database import database as db
+from .ai import ppe_detector
+from .api import alerts, cameras, detection, workers, live
+
+logger = get_logger("main")
+
+app = FastAPI(title="SafeVision AI Backend")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(workers.router)
+app.include_router(alerts.router)
+app.include_router(cameras.router)
+app.include_router(detection.router)
+app.include_router(live.router)
+
+# MySQL down ho to bhi backend chale (alerts/reports gracefully empty)
+try:
+    db.init_db()
+except Exception as e:
+    logger.error(f"MySQL init failed (backend phir bhi chalega): {e}")
+
+os.makedirs(settings.EVIDENCE_DIR, exist_ok=True)
+app.mount("/evidence", StaticFiles(directory=settings.EVIDENCE_DIR), name="evidence")
+
+REAL_IMPLEMENTED = True
+
+
+def effective_mode() -> str:
+    if settings.AI_MODE == "REAL" and REAL_IMPLEMENTED and os.path.exists(settings.MODEL_PATH):
+        return "REAL"
+    return "DEMO"
+
+
+@app.get("/health")
+def health():
+    logger.info("Health check requested")
+    return {
+        "status": "ok",
+        "mode": effective_mode(),
+        "models": {
+            "ppe_model": os.path.exists(settings.MODEL_PATH),
+            "fire_smoke_model": os.path.exists(settings.FIRE_SMOKE_MODEL_PATH),
+        },
+        "supported_classes": (
+            ppe_detector.supported_classes()
+            if os.path.exists(settings.MODEL_PATH)
+            else ["person"]
+        ),
+    }
+
+
+if os.path.isdir(settings.VIDEOS_DIR):
+    app.mount("/videos", StaticFiles(directory=settings.VIDEOS_DIR), name="videos")
+
+===== FILE: backend\rules\__init__.py =====
+
+
+===== FILE: backend\rules\compliance_engine.py =====
+from ..utils.logger import get_logger
+
+logger = get_logger("compliance_engine")
+
+CLASS_HELMET = "helmet"
+CLASS_VEST = "vest"
+NO_HELMET_CLASSES = {"no_helmet", "none"}
+# Ye violation sirf tab banegi jab MODEL ye classes actually return kare
+NO_VEST_CLASSES = {"no_vest", "without_vest", "no-vest"}
+
+HEAD_BAND = (0.0, 0.50)   # crouching workers ke heads bhi cover hon
+VEST_BAND = (0.15, 0.75)
+
+
+def _overlap(box1, box2):
+    x1 = max(box1[0], box2[0])
+    y1 = max(box1[1], box2[1])
+    x2 = min(box1[2], box2[2])
+    y2 = min(box1[3], box2[3])
+    if x2 < x1 or y2 < y1:
+        return 0
+    return (x2 - x1) * (y2 - y1)
+
+
+def _assign(person_box, candidates, band, threshold=0.3):
+    px1, py1, px2, py2 = person_box
+    ph = py2 - py1
+    best_label, best_score = None, 0
+    for det in candidates:
+        b = det["bbox"]
+        cy = (b[1] + b[3]) / 2
+        rel_y = (cy - py1) / ph if ph else 1
+        if not (band[0] <= rel_y <= band[1]):
+            continue
+        inter = _overlap(person_box, b)
+        if inter <= 0:
+            continue
+        det_area = (b[2] - b[0]) * (b[3] - b[1])
+        inside_ratio = inter / det_area if det_area else 0
+        score = inside_ratio * det["confidence"]
+        if score > best_score and score > threshold:
+            best_score, best_label = score, det["label"]
+    return best_label
+
+
+def _is_person(label: str) -> bool:
+    return label.lower() == "person"
+
+
+def analyze_detections(dets):
+    persons = [d for d in dets if _is_person(d["label"])]
+    persons.sort(key=lambda d: d["bbox"][0])
+    head_dets = [d for d in dets if d["label"] == CLASS_HELMET or d["label"] in NO_HELMET_CLASSES]
+    vest_dets = [d for d in dets if d["label"] == CLASS_VEST or d["label"] in NO_VEST_CLASSES]
+
+    workers, violations = [], []
+    compliant_count = 0
+
+    for i, p in enumerate(persons, start=1):
+        head = _assign(p["bbox"], head_dets, HEAD_BAND)
+        vest = _assign(p["bbox"], vest_dets, VEST_BAND) if vest_dets else None
+
+        helmet_ok = head == CLASS_HELMET
+        no_helmet = head in NO_HELMET_CLASSES
+        vest_ok = vest == CLASS_VEST
+        no_vest = vest in NO_VEST_CLASSES   # model class na de to ye kabhi true nahi hoga
+
+        workers.append({"id": i, "helmet": helmet_ok, "vest": vest_ok,
+                        "no_vest": no_vest, "head_status": head})
+
+        # compliant = helmet OK aur (agar model vest-violation jaanta ho) vest missing NA ho
+        if helmet_ok and not no_vest:
+            compliant_count += 1
+
+        if no_helmet:
+            violations.append({
+                "type": "PPE", "rule": "NO_HELMET", "severity": "HIGH",
+                "message": "No Helmet Detected", "worker_id": i,
+            })
+
+        if no_vest:
+            violations.append({
+                "type": "PPE", "rule": "NO_VEST", "severity": "MEDIUM",
+                "message": "No Vest Detected", "worker_id": i,
+            })
+
+    return {
+        "workers": workers,
+        "violations": violations,
+        "stats": {
+            "totalWorkers": len(persons),
+            "compliantWorkers": compliant_count,
+            "ppeViolations": len(violations),
+        },
+    }
+
+===== FILE: backend\rules\violation_tracker.py =====
+from datetime import datetime
+
+from ..database import database
+from ..utils.logger import get_logger
+
+logger = get_logger("violation_tracker")
+
+_incident_counter = 1
+_recent_incidents = []
+
+
+def record_incident(violation, camera_id, zone_name, frame_url=None):
+    global _incident_counter
+    incident = {
+        "id": _incident_counter,
+        "type": violation["type"],
+        "severity": violation["severity"],
+        "message": violation["message"],
+        "camera": camera_id,
+        "zone": zone_name,
+        "time": datetime.now().strftime("%H:%M"),
+        "worker_id": violation.get("worker_id"),
+    }
+    _incident_counter += 1
+    _recent_incidents.insert(0, incident)
+    _recent_incidents[:] = _recent_incidents[:50]
+
+        # Persistent storage (MySQL)
+    try:
+        database.insert_incident(incident, frame_url)
+    except Exception as e:
+        logger.error(f"DB insert failed: {e}")
+
+    logger.info(f"INCIDENT #{incident['id']}: {incident['message']} @ {camera_id}")
+    return incident
+
+
+def get_recent_incidents():
+    return _recent_incidents
+
+===== FILE: backend\rules\zone_rules.py =====
+import json
+import os
+from ..config import settings
+from ..utils.logger import get_logger
+
+logger = get_logger("zone_rules")
+
+
+def load_zones():
+    path = os.path.join(settings.CONFIGS_DIR, "zones.json")
+    if not os.path.exists(path):
+        return []
+    with open(path) as f:
+        return json.load(f).get("zones", [])
+
+
+def load_ppe_rules():
+    path = os.path.join(settings.CONFIGS_DIR, "ppe_rules.json")
+    if not os.path.exists(path):
+        return {}
+    with open(path) as f:
+        return json.load(f)
+
+
+def zone_for_camera(camera_id: str):
+    for z in load_zones():
+        if camera_id in z.get("cameras", []):
+            return z
+    return {"name": "Unknown Zone"}
+
+===== FILE: backend\utils\__init__.py =====
+
+
+===== FILE: backend\utils\evidence.py =====
+import os
+import time
+
+import cv2
+
+from ..config import settings
+
+
+def save_snapshot(frame, tag: str) -> str:
+    """Violation frame ko evidence/alerts/ mein save karta hai."""
+    os.makedirs(settings.EVIDENCE_DIR, exist_ok=True)
+    fname = f"{tag}_{int(time.time())}.jpg"
+    path = os.path.join(settings.EVIDENCE_DIR, fname)
+    cv2.imwrite(path, frame)
+    return f"/evidence/{fname}"
+
+===== FILE: backend\utils\logger.py =====
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
+
+
+def get_logger(name: str) -> logging.Logger:
+    return logging.getLogger(name)
+
+===== FILE: backend\utils\video.py =====
+import cv2
+from ..utils.logger import get_logger
+
+logger = get_logger("video")
+
+
+def open_video(path: str):
+    cap = cv2.VideoCapture(path)
+    if not cap.isOpened():
+        raise FileNotFoundError(f"Video nahi khul saka: {path}")
+    return cap
+
+
+def get_frame_count(cap) -> int:
+    return int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+
+
+def sample_frames(cap, every_n: int = 10, max_frames: int = 50):
+    idx = 0
+    processed = 0
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        if idx % every_n == 0:
+            yield idx, frame
+            processed += 1
+            if processed >= max_frames:
+                break
+        idx += 1
+    cap.release()
+
+
+def to_percent_boxes(dets, frame_w, frame_h):
+    out = []
+    for d in dets:
+        x1, y1, x2, y2 = d["bbox"]
+        out.append({
+            "label": d["label"],
+            "confidence": d["confidence"],
+            "x": round(x1 / frame_w * 100, 2),
+            "y": round(y1 / frame_h * 100, 2),
+            "w": round((x2 - x1) / frame_w * 100, 2),
+            "h": round((y2 - y1) / frame_h * 100, 2),
+        })
+    return out
+
+===== FILE: configs\ppe_rules.json =====
+{
+  "required_ppe": ["helmet"],
+  "optional_ppe": ["vest", "gloves", "goggles", "safety_shoes"],
+  "honesty_note": "Dataset mein 'no_vest' class nahi hai — vest detection sirf informational hai, violation nahi.",
+  "severity": {
+    "fire": "CRITICAL",
+    "smoke": "HIGH",
+    "no_helmet": "HIGH"
+  }
+}
+
+
+===== FILE: configs\zones.json =====
+{
+  "zones": [
+    { "id": "Z1", "name": "Production Area", "cameras": ["CAM-01"] },
+    { "id": "Z2", "name": "Warehouse", "cameras": ["CAM-02"] },
+    { "id": "Z3", "name": "Boiler Area", "cameras": ["CAM-03"] },
+    { "id": "Z4", "name": "Entry Gate", "cameras": ["CAM-04"] },
+    { "id": "Z5", "name": "Live Monitoring", "cameras": ["CAM-LIVE"] }
+  ]
+}
+
+
+===== FILE: frontend\.oxlintrc.json =====
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["react", "oxc"],
+  "rules": {
+    "react/rules-of-hooks": "error",
+    "react/only-export-components": ["warn", { "allowConstantExport": true }]
+  }
+}
+
+
+===== FILE: frontend\package.json =====
+{
+  "name": "frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "lint": "oxlint",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "axios": "^1.20.0",
+    "lucide-react": "^1.52.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-router-dom": "^7.18.4",
+    "recharts": "^3.10.1",
+    "socket.io-client": "^4.8.4"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^6.1.1",
+    "autoprefixer": "^10.6.1",
+    "oxlint": "^1.81.0",
+    "postcss": "^8.5.29",
+    "tailwindcss": "^3.4.19",
+    "vite": "^8.3.0"
+  }
+}
+
+
+===== FILE: frontend\postcss.config.js =====
+export default {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {},
+  },
+}
+
+
+===== FILE: frontend\README.md =====
+# React + Vite
+
+This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+
+Currently, two official plugins are available:
+
+- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
+- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+
+## React Compiler
+
+The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+
+## Expanding the Oxlint configuration
+
+If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+
+
+===== FILE: frontend\src\App.jsx =====
+import { useState } from 'react';
+import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
+import { LayoutDashboard, Video, Bell, BarChart3, ShieldCheck } from 'lucide-react';
+import Dashboard from './pages/Dashboard';
+import Monitoring from './pages/Monitoring';
+import Alerts from './pages/Alerts';
+import Reports from './pages/Reports';
+
+const nav = [
+  { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
+  { to: '/monitoring', label: 'Monitoring', icon: Video },
+  { to: '/alerts', label: 'Alerts', icon: Bell },
+  { to: '/reports', label: 'Reports', icon: BarChart3 },
+];
+
+export default function App() {
+  const [mode, setMode] = useState(() => localStorage.getItem('sv_mode') || 'DEMO');
+  const changeMode = m => {
+    localStorage.setItem('sv_mode', m);
+    setMode(m);
+  };
+
+  return (
+    <BrowserRouter>
+      <div className="min-h-screen bg-slate-950 text-slate-100">
+        <aside className="fixed top-0 left-0 h-full w-60 bg-slate-900 border-r border-slate-800 hidden md:flex flex-col">
+          <div className="flex items-center gap-2 px-5 h-16 border-b border-slate-800">
+            <ShieldCheck className="text-emerald-400" size={24} />
+            <div>
+              <p className="font-bold leading-none">SafeVision AI</p>
+              <p className="text-[10px] text-slate-400 mt-1">
+                See Risks. Detect Violations. Respond Faster.
+              </p>
+            </div>
+          </div>
+          <nav className="flex-1 p-3 space-y-1">
+            {nav.map(({ to, label, icon: Icon, end }) => (
+              <NavLink
+                key={to}
+                to={to}
+                end={end}
+                className={({ isActive }) =>
+                  `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium ${
+                    isActive
+                      ? 'bg-emerald-500/10 text-emerald-400'
+                      : 'text-slate-400 hover:bg-slate-800'
+                  }`
+                }
+              >
+                <Icon size={18} /> {label}
+              </NavLink>
+            ))}
+          </nav>
+          <p className="p-4 text-[10px] text-slate-500 border-t border-slate-800">
+            SafeVision AI • v1.0
+          </p>
+        </aside>
+
+        <div className="md:pl-60">
+          <header className="h-14 flex items-center justify-between px-5 bg-slate-900/80 border-b border-slate-800 sticky top-0 z-30">
+            <p className="font-semibold">SafeVision AI</p>
+            <div className="flex rounded-lg border border-slate-700 overflow-hidden">
+              <button
+                onClick={() => changeMode('DEMO')}
+                className={`px-3 py-1.5 text-xs font-semibold ${mode === 'DEMO' ? 'bg-amber-500 text-slate-900' : 'text-slate-400'}`}
+              >
+                DEMO MODE
+              </button>
+              <button
+                onClick={() => changeMode('REAL')}
+                className={`px-3 py-1.5 text-xs font-semibold ${mode === 'REAL' ? 'bg-emerald-500 text-slate-900' : 'text-slate-400'}`}
+              >
+                REAL AI MODE
+              </button>
+            </div>
+          </header>
+
+          {mode === 'DEMO' && (
+            <div className="mx-5 mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-amber-300">
+              ⚠️ DEMO MODE — sample data sirf demonstration ke liye, real AI detections nahi.
+            </div>
+          )}
+
+          <main className="p-5">
+            <Routes>
+              <Route path="/" element={<Dashboard mode={mode} />} />
+              <Route path="/monitoring" element={<Monitoring mode={mode} />} />
+              <Route path="/alerts" element={<Alerts mode={mode} />} />
+              <Route path="/reports" element={<Reports mode={mode} />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </main>
+        </div>
+      </div>
+    </BrowserRouter>
+  );
+}
+
+
+===== FILE: frontend\src\components\AlertCard.jsx =====
+import { Flame, Wind, HardHat, Info } from 'lucide-react';
+
+const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
+const iconFor = { FIRE: Flame, SMOKE: Wind, PPE: HardHat };
+const sevTone = {
+  LOW: 'bg-blue-500/10 text-blue-400 border-blue-500/30',
+  MEDIUM: 'bg-yellow-500/10 text-yellow-400 border-yellow-500/30',
+  HIGH: 'bg-orange-500/10 text-orange-400 border-orange-500/30',
+  CRITICAL: 'bg-red-500/10 text-red-400 border-red-500/30',
+};
+
+export default function AlertCard({ alert }) {
+  const Icon = iconFor[alert.type] || Info;
+  return (
+    <div className="flex items-start gap-3 bg-slate-900 border border-slate-800 rounded-xl p-4">
+      <span className="p-2 rounded-lg bg-slate-800 text-slate-300">
+        <Icon size={18} />
+      </span>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-sm font-medium text-slate-200 truncate">{alert.message}</p>
+          <span
+            className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${sevTone[alert.severity]}`}
+          >
+            {alert.severity}
+          </span>
+        </div>
+        <p className="text-xs text-slate-500 mt-1">
+          {alert.camera} • {alert.zone} • {alert.time}
+        </p>
+        {alert.frame_url && (
+          <img
+            src={`${API}${alert.frame_url}`}
+            alt="evidence"
+            className="mt-2 rounded-lg border border-slate-700 max-h-32"
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+===== FILE: frontend\src\components\CameraFeed.jsx =====
+import { useEffect, useRef, useState } from 'react';
+import { Video } from 'lucide-react';
+import DetectionBox from './DetectionBox';
+
+export default function CameraFeed({
+  title,
+  status = 'ONLINE',
+  videoUrl,
+  detections = [],
+  timeline = null,
+  demo,
+}) {
+  const videoRef = useRef(null);
+  const [synced, setSynced] = useState(detections);
+
+  // Static/DEMO: boxes jaisi hain waisi
+  useEffect(() => {
+    if (!timeline) setSynced(detections);
+  }, [detections, timeline]);
+
+  // REAL: video ke CURRENT time ke matching analyzed frame ki detections
+  const onTimeUpdate = () => {
+    if (!timeline || !videoRef.current || !videoRef.current.duration) return;
+    const pct = (videoRef.current.currentTime / videoRef.current.duration) * 100;
+    let cur = [];
+    for (const entry of timeline) {
+      if (entry.t <= pct + 1) cur = entry.detections;
+      else break;
+    }
+    setSynced(cur);
+  };
+
+  return (
+    <div className="rounded-xl overflow-hidden border border-slate-800 bg-slate-950">
+      <div className="flex items-center justify-between px-4 py-2 bg-slate-900 border-b border-slate-800">
+        <p className="text-sm text-slate-200">{title}</p>
+        <span
+          className={`text-[10px] font-bold px-2 py-0.5 rounded ${status === 'ONLINE' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}
+        >
+          {status}
+        </span>
+      </div>
+      <div className="relative aspect-video bg-gradient-to-br from-slate-800 via-slate-900 to-slate-950">
+        {videoUrl ? (
+          <video
+            ref={videoRef}
+            onTimeUpdate={onTimeUpdate}
+            src={videoUrl}
+            controls
+            autoPlay
+            muted
+            loop
+            className="w-full h-full object-cover"
+          />
+        ) : (
+          <div className="absolute inset-0 flex items-center justify-center text-slate-600">
+            <Video size={40} />
+          </div>
+        )}
+        {synced.map((d, i) => (
+          <DetectionBox key={i} d={d} />
+        ))}
+        {demo && (
+          <span className="absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded bg-amber-500 text-slate-900">
+            DEMO MODE
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+===== FILE: frontend\src\components\ComplianceCard.jsx =====
+import { ShieldCheck } from 'lucide-react';
+
+export default function ComplianceCard({ compliant, total }) {
+  const percent = total ? Math.round((compliant / total) * 100) : 0;
+  const bar = percent >= 80 ? 'bg-emerald-500' : percent >= 50 ? 'bg-amber-500' : 'bg-red-500';
+  const text =
+    percent >= 80 ? 'text-emerald-400' : percent >= 50 ? 'text-amber-400' : 'text-red-400';
+
+  return (
+    <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-slate-400">Safety Compliance</p>
+        <ShieldCheck className={text} size={20} />
+      </div>
+      <p className={`text-3xl font-bold mt-2 ${total ? text : 'text-slate-500'}`}>
+        {total ? `${percent}%` : '—'}
+      </p>
+      <div className="mt-3 h-2 rounded-full bg-slate-800">
+        <div className={`h-2 rounded-full ${bar}`} style={{ width: `${percent}%` }} />
+      </div>
+      <p className="text-xs text-slate-500 mt-2">
+        {total ? `${compliant}/${total} workers compliant` : 'Insufficient data'}
+      </p>
+    </div>
+  );
+}
+
+
+===== FILE: frontend\src\components\DetectionBox.jsx =====
+function colorFor(label) {
+  if (['fire', 'no_helmet', 'no_vest', 'no_gloves'].includes(label))
+    return 'border-red-500 text-red-400';
+  if (label === 'smoke') return 'border-amber-500 text-amber-400';
+  return 'border-emerald-500 text-emerald-400';
+}
+
+export default function DetectionBox({ d }) {
+  const tone = colorFor(d.label);
+  return (
+    <div
+      className={`absolute border-2 ${tone.split(' ')[0]}`}
+      style={{ left: `${d.x}%`, top: `${d.y}%`, width: `${d.w}%`, height: `${d.h}%` }}
+    >
+      <span
+        className={`absolute -top-5 left-0 text-[10px] font-bold px-1 rounded bg-slate-950/90 ${tone.split(' ')[1]}`}
+      >
+        {d.label} {Math.round(d.confidence * 100)}%
+      </span>
+    </div>
+  );
+}
+
+
+===== FILE: frontend\src\components\WorkerCard.jsx =====
+export default function WorkerCard({ id, helmet, vest, gloves }) {
+  // HONESTY: status sirf helmet par (vest absence reliably detect nahi hota)
+  const compliant = helmet;
+  return (
+    <div
+      className={`rounded-xl border p-4 ${compliant ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-red-500/30 bg-red-500/5'}`}
+    >
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-semibold text-slate-200">Worker #{id}</p>
+        <span className={`text-xs font-bold ${compliant ? 'text-emerald-400' : 'text-red-400'}`}>
+          {compliant ? 'COMPLIANT' : 'VIOLATION'}
+        </span>
+      </div>
+      <div className="flex gap-2 mt-3">
+        <Chip ok={helmet} label="Helmet" danger />
+        {vest !== undefined && <Chip ok={vest} label="Vest (info)" />}
+        {gloves !== undefined && <Chip ok={gloves} label="Gloves" danger />}
+      </div>
+    </div>
+  );
+}
+
+function Chip({ ok, label, danger }) {
+  const tone = ok
+    ? 'bg-emerald-500/10 text-emerald-400'
+    : danger
+      ? 'bg-red-500/10 text-red-400'
+      : 'bg-slate-700/40 text-slate-400';
+  return (
+    <span className={`px-2 py-1 rounded text-[10px] font-semibold ${tone}`}>
+      {ok ? '✓' : '–'} {label}
+    </span>
+  );
+}
+
+
+===== FILE: frontend\src\main.jsx =====
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import App from './App.jsx';
+import './index.css';
+
+ReactDOM.createRoot(document.getElementById('root')).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+);
+
+
+===== FILE: frontend\src\pages\Alerts.jsx =====
+import { useEffect, useState } from 'react';
+import AlertCard from '../components/AlertCard';
+import { getAlerts } from '../services/api';
+
+export default function Alerts({ mode }) {
+  const [alerts, setAlerts] = useState([]);
+  useEffect(() => {
+    getAlerts(mode).then(setAlerts);
+  }, [mode]);
+
+  return (
+    <div className="space-y-4">
+      {alerts.length ? (
+        alerts.map(a => <AlertCard key={a.id} alert={a} />)
+      ) : (
+        <p className="text-sm text-slate-500">Insufficient data</p>
+      )}
+    </div>
+  );
+}
+
+
+===== FILE: frontend\src\pages\Dashboard.jsx =====
+import { useEffect, useState } from 'react';
+import { Users, HardHat, Flame, Wind } from 'lucide-react';
+import ComplianceCard from '../components/ComplianceCard';
+import WorkerCard from '../components/WorkerCard';
+import { getStats, getWorkers } from '../services/api';
+
+function Card({ icon: Icon, label, value, tone }) {
+  return (
+    <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-slate-400">{label}</p>
+        <Icon size={18} className={tone} />
+      </div>
+      <p className="text-3xl font-bold mt-2 text-slate-100">{value ?? '—'}</p>
+    </div>
+  );
+}
+
+export default function Dashboard({ mode }) {
+  const [stats, setStats] = useState(null);
+  const [workers, setWorkers] = useState([]);
+
+  useEffect(() => {
+    getStats(mode).then(setStats);
+    getWorkers(mode).then(setWorkers);
+  }, [mode]);
+
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <Card icon={Users} label="Total Workers" value={stats?.totalWorkers} tone="text-blue-400" />
+        <Card
+          icon={HardHat}
+          label="PPE Violations"
+          value={stats?.ppeViolations}
+          tone="text-red-400"
+        />
+        <Card
+          icon={Flame}
+          label="Fire Incidents"
+          value={stats?.fireIncidents}
+          tone="text-red-400"
+        />
+        <Card
+          icon={Wind}
+          label="Smoke Incidents"
+          value={stats?.smokeIncidents}
+          tone="text-amber-400"
+        />
+      </div>
+      <ComplianceCard compliant={stats?.compliantWorkers} total={stats?.totalWorkers} />
+      <div>
+        <h3 className="font-semibold text-slate-100 mb-3">Worker PPE Status</h3>
+        <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4">
+          {workers.length ? (
+            workers.map(w => <WorkerCard key={w.id} {...w} />)
+          ) : (
+            <p className="text-sm text-slate-500">Insufficient data</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+===== FILE: frontend\src\pages\Monitoring.jsx =====
+import { useEffect, useState } from 'react';
+import CameraFeed from '../components/CameraFeed';
+import { getDetections } from '../services/api';
+
+const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
+export default function Monitoring({ mode }) {
+  const [scenario, setScenario] = useState('compliant');
+  const [detections, setDetections] = useState([]);
+  const [stats, setStats] = useState(null);
+
+  useEffect(() => {
+    setDetections([]);
+    setStats(null);
+    if (scenario === 'live') return;
+    getDetections(mode, scenario).then(res => {
+      const list = Array.isArray(res) ? res : (res?.detections ?? []);
+      setDetections(list);
+      setStats(!Array.isArray(res) ? (res?.stats ?? null) : null);
+    });
+  }, [mode, scenario]);
+
+  // Risks: sirf actual violations (none ko hatao — wo sirf "head dikha, helmet nahi" ka status hai)
+  const risks = detections.filter(
+    d =>
+      d.label === 'no_helmet' ||
+      d.label.toLowerCase() === 'fire' ||
+      d.label.toLowerCase() === 'smoke'
+  );
+
+  const personsDetected =
+    mode === 'REAL'
+      ? (stats?.totalWorkers ?? '—')
+      : detections.filter(d => d.label.toLowerCase() === 'person').length;
+
+  const videoUrl = mode === 'REAL' && scenario !== 'live' ? `${API}/videos/${scenario}.mp4` : null;
+
+  return (
+    <div className="grid lg:grid-cols-3 gap-6">
+      <div className="lg:col-span-2 space-y-4">
+        <select
+          value={scenario}
+          onChange={e => setScenario(e.target.value)}
+          className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm"
+        >
+          <option value="compliant">Compliant Video</option>
+          <option value="violation">Violation Video</option>
+          <option value="fire_smoke">Fire / Smoke Video</option>
+          <option value="live">🔴 Live Webcam (REAL)</option>
+        </select>
+
+        {scenario === 'live' ? (
+          <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-2 border-b border-slate-800">
+              <p className="text-sm font-medium text-slate-200">Live Webcam — REAL AI Detection</p>
+              <span className="text-[10px] font-bold text-red-400 animate-pulse">● LIVE</span>
+            </div>
+            <img src={`${API}/api/live/stream`} alt="live camera" className="w-full" />
+          </div>
+        ) : (
+          <CameraFeed
+            title={`Factory Cam — ${scenario}`}
+            videoUrl={videoUrl}
+            detections={detections}
+            demo={mode === 'DEMO'}
+          />
+        )}
+      </div>
+
+      <div className="space-y-4">
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+          <p className="text-sm text-slate-400">Persons Detected</p>
+          <p className="text-2xl font-bold text-slate-100">{personsDetected}</p>
+        </div>
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+          <p className="text-sm text-slate-400 mb-2">Active Risks</p>
+          {scenario === 'live' ? (
+            <p className="text-xs text-slate-500">
+              Boxes live video par hi dikhte hain. Incidents → Alerts + MySQL.
+            </p>
+          ) : risks.length === 0 ? (
+            <p className="text-sm text-emerald-400">No violations ✓</p>
+          ) : (
+            risks.map((v, i) => (
+              <p key={i} className="text-sm text-red-400">
+                ⚠ {v.label} ({Math.round(v.confidence * 100)}%)
+              </p>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+===== FILE: frontend\src\pages\Reports.jsx =====
+import { useEffect, useState } from 'react';
+import {
+  ResponsiveContainer,
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  BarChart,
+  Bar,
+  Legend,
+} from 'recharts';
+import { getReports } from '../services/api';
+
+export default function Reports({ mode }) {
+  const [reports, setReports] = useState(null);
+  useEffect(() => {
+    getReports(mode).then(setReports);
+  }, [mode]);
+
+  const empty =
+    !reports ||
+    ((reports.complianceTrend?.length || 0) === 0 && (reports.incidentTrend?.length || 0) === 0);
+
+  if (empty) {
+    return (
+      <p className="text-sm text-slate-500">
+        Insufficient data — real analyses ke baad trends yahan MySQL se dikhenge.
+      </p>
+    );
+  }
+
+  return (
+    <div className="grid lg:grid-cols-2 gap-6">
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+        <h3 className="font-semibold text-slate-100 mb-4">Compliance Trend</h3>
+        <ResponsiveContainer width="100%" height={250}>
+          <AreaChart data={reports.complianceTrend}>
+            <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" />
+            <XAxis dataKey="day" stroke="#64748b" fontSize={11} />
+            <YAxis stroke="#64748b" fontSize={11} domain={[0, 100]} />
+            <Tooltip
+              contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8 }}
+            />
+            <Area
+              type="monotone"
+              dataKey="value"
+              stroke="#10b981"
+              fill="#10b98133"
+              strokeWidth={2}
+            />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+        <h3 className="font-semibold text-slate-100 mb-4">Incident Trend</h3>
+        <ResponsiveContainer width="100%" height={250}>
+          <BarChart data={reports.incidentTrend}>
+            <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" />
+            <XAxis dataKey="day" stroke="#64748b" fontSize={11} />
+            <YAxis stroke="#64748b" fontSize={11} />
+            <Tooltip
+              contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8 }}
+            />
+            <Legend wrapperStyle={{ fontSize: 11 }} />
+            <Bar dataKey="ppe" fill="#8b5cf6" radius={3} />
+            <Bar dataKey="fire" fill="#ef4444" radius={3} />
+            <Bar dataKey="smoke" fill="#f59e0b" radius={3} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+
+===== FILE: frontend\src\services\api.js =====
+import axios from 'axios';
+
+// Python backend (port 8000)
+const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const http = axios.create({ baseURL: API, timeout: 60000 });
+
+/* ----------------- DEMO DATA (sirf DEMO MODE ke liye, clearly labeled) ---------- */
+
+const demoStats = {
+  totalWorkers: 25,
+  compliantWorkers: 22,
+  ppeViolations: 3,
+  fireIncidents: 1,
+  smokeIncidents: 2,
+};
+
+const demoWorkers = [
+  { id: 1, helmet: true, vest: true, gloves: true },
+  { id: 2, helmet: false, vest: true },
+  { id: 3, helmet: true, vest: false },
+  { id: 4, helmet: true, vest: true },
+];
+
+const demoAlerts = [
+  {
+    id: 1,
+    type: 'PPE',
+    severity: 'HIGH',
+    message: 'No Helmet Detected',
+    camera: 'CAM-01',
+    zone: 'Production Area',
+    time: '10:41 AM',
+  },
+  {
+    id: 2,
+    type: 'FIRE',
+    severity: 'CRITICAL',
+    message: 'Fire Detected',
+    camera: 'CAM-02',
+    zone: 'Warehouse',
+    time: '10:38 AM',
+  },
+  {
+    id: 3,
+    type: 'SMOKE',
+    severity: 'HIGH',
+    message: 'Smoke Detected',
+    camera: 'CAM-03',
+    zone: 'Boiler Area',
+    time: '10:31 AM',
+  },
+];
+
+const demoDetections = {
+  compliant: [
+    { label: 'person', confidence: 0.96, x: 10, y: 15, w: 22, h: 70 },
+    { label: 'helmet', confidence: 0.93, x: 12, y: 15, w: 8, h: 10 },
+    { label: 'vest', confidence: 0.91, x: 12, y: 35, w: 16, h: 25 },
+    { label: 'person', confidence: 0.94, x: 55, y: 20, w: 22, h: 68 },
+    { label: 'helmet', confidence: 0.9, x: 57, y: 20, w: 8, h: 10 },
+  ],
+  violation: [
+    { label: 'person', confidence: 0.95, x: 15, y: 18, w: 22, h: 68 },
+    { label: 'no_helmet', confidence: 0.89, x: 17, y: 18, w: 8, h: 10 },
+    { label: 'person', confidence: 0.93, x: 60, y: 22, w: 20, h: 66 },
+    { label: 'helmet', confidence: 0.92, x: 62, y: 22, w: 8, h: 10 },
+  ],
+  fire_smoke: [
+    { label: 'fire', confidence: 0.91, x: 40, y: 55, w: 18, h: 25 },
+    { label: 'smoke', confidence: 0.87, x: 38, y: 20, w: 26, h: 35 },
+  ],
+};
+
+const demoReports = {
+  complianceTrend: [
+    { day: 'Mon', value: 72 },
+    { day: 'Tue', value: 75 },
+    { day: 'Wed', value: 71 },
+    { day: 'Thu', value: 80 },
+    { day: 'Fri', value: 84 },
+    { day: 'Sat', value: 82 },
+    { day: 'Sun', value: 88 },
+  ],
+  incidentTrend: [
+    { day: 'Mon', ppe: 4, fire: 1, smoke: 2 },
+    { day: 'Tue', ppe: 3, fire: 0, smoke: 1 },
+    { day: 'Wed', ppe: 6, fire: 2, smoke: 2 },
+    { day: 'Thu', ppe: 2, fire: 0, smoke: 1 },
+    { day: 'Fri', ppe: 5, fire: 1, smoke: 3 },
+    { day: 'Sat', ppe: 3, fire: 0, smoke: 0 },
+    { day: 'Sun', ppe: 1, fire: 0, smoke: 1 },
+  ],
+};
+
+/* ----------------- FAIL-SAFE FETCH ----------
+ * DEMO mode  -> frontend demo data (UI mein amber "DEMO MODE" banner)
+ * REAL mode  -> backend se asli data; error par KHALI (null/[]) —
+ *               kabhi bhi demo data REAL mein nahi dikhta (no fake AI)
+ */
+async function fetchOrDemo(mode, path, demo, fallback) {
+  if (mode === 'DEMO') return demo;
+  try {
+    const r = await http.get(path);
+    return r.data ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/* ----------------- API FUNCTIONS ----------
+ * mode backend ko bheja jata hai (?mode=...) taaki backend
+ * REAL mein kabhi demo data return na kare.
+ */
+
+export const getStats = mode => fetchOrDemo(mode, `/api/stats?mode=${mode}`, demoStats, null);
+
+export const getWorkers = mode => fetchOrDemo(mode, `/api/workers?mode=${mode}`, demoWorkers, []);
+
+export const getAlerts = mode => fetchOrDemo(mode, `/api/alerts?mode=${mode}`, demoAlerts, []);
+
+export const getReports = mode => fetchOrDemo(mode, `/api/reports?mode=${mode}`, demoReports, null);
+
+/* Videos jo backend ke videos/ folder mein ASAL mein maujood hain
+ * (frontend dropdown inhi se banta hai — 404/"video not found" fix) */
+export const getVideos = async () => {
+  try {
+    const r = await http.get('/api/videos');
+    return r.data || [];
+  } catch {
+    return [];
+  }
+};
+
+/* REAL: { detections, timeline } — timeline = per-frame synced boxes
+ * DEMO: static boxes (timeline null) */
+export const getDetections = (mode, scenario) => {
+  if (mode === 'DEMO') {
+    return Promise.resolve(demoDetections[scenario] || []);
+  }
+  // REAL mode: do NOT silently catch errors — let frontend know
+  return http
+    .get(`/api/detections?video=${scenario}&mode=${mode}`)
+    .then(r => r.data)
+    .catch(err => {
+      console.error('REAL detection failed:', err);
+      throw err; // Propagate error instead of hiding it
+    });
+};
+
+
+===== FILE: frontend\tailwind.config.js =====
+/** @type {import('tailwindcss').Config} */
+export default {
+  content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
+  theme: {
+    extend: {},
+  },
+  plugins: [],
+};
+
+
+===== FILE: frontend\vite.config.js =====
+import react from '@vitejs/plugin-react'
+import { defineConfig } from 'vite'
+
+// https://vite.dev/config/
+export default defineConfig({
+  plugins: [react()],
+})
+
+
+===== FILE: README.md =====
+# 🦺 SafeVision AI
+### See Risks. Detect Violations. Respond Faster.
+
+AI-powered factory safety monitoring system jo **live webcam** aur recorded video feeds par **custom-trained YOLOv8 models** se PPE violations (no-helmet), **fire** aur **smoke** detect karta hai — real bounding boxes, real confidence scores, real MySQL persistence, real evidence snapshots. **Koi fake AI nahi.**
+
+---
+
+## ✨ Features
+
+- 🔴 **Live Webcam Detection** — laptop/USB camera par REAL-time YOLO (MJPEG stream, `/api/live/stream`)
+- 🧠 **2 Custom-Trained YOLOv8 Models:**
+  - **PPE model** — 1,416 images, 11 classes (Person, helmet, no_helmet, none, vest, gloves, boots, goggles...)
+  - **Fire/Smoke model** — Roboflow "Fire and smoke" dataset
+- 🎭 **DEMO / REAL Modes** — DEMO clearly labeled (amber banner); REAL tabhi jab trained model maujood ho
+- 👷 **Worker Compliance Engine** — Person ↔ Helmet spatial (IoU) matching, per-worker status
+- 🔥 **Fire & Smoke Incidents** — CRITICAL / HIGH severity alerts
+- 🚨 **Smart Alerts** — 60-second dedup cooldown (no alert spam)
+- 📸 **Evidence Capture** — har violation ka frame snapshot (`evidence/alerts/*.jpg`)
+- 🗄️ **MySQL 8.0 Persistence** — `incidents` + `daily_stats` tables
+- 📊 **Real Reports** — REAL mode mein compliance/incident trends **MySQL se**
+- 🗺️ **Zone Rules** — `configs/zones.json` (CAM-01…CAM-04 + CAM-LIVE) & `configs/ppe_rules.json`
+- 📓 **Training Notebooks** — `notebooks/ppe_training.ipynb`, `notebooks/fire_smoke_training.ipynb`
+
+---
+
+## 🏗️ Architecture
+
+```
+┌──────────────────┐    HTTP/JSON     ┌──────────────────────────┐
+│  React Frontend  │ ◄───────────────►│  FastAPI Backend (:8000) │
+│ (Vite + Tailwind)│                  │                          │
+└──────────────────┘                  └────────────┬─────────────┘
+                                                   │
+                ┌──────────────┬───────────────────┼──────────────┐
+                ▼              ▼                   ▼              ▼
+            ai/ (YOLO)     rules/             database/        utils/
+            ppe + fire/    compliance         MySQL 8.0        video,
+            smoke          engine (IoU)       incidents +      evidence,
+                           zone rules         daily_stats      logger
+                           violation tracker
+                ▲
+        alerts/ (alert manager — 60s dedup)
+                ▲
+            api/live (webcam MJPEG stream)
+```
+
+**backend/ structure:**
+```
+backend/
+├── main.py            # App entry, routers, static serving, DB init (crash-safe)
+├── config.py          # env-based settings (AI_MODE, MySQL, paths)
+├── api/               # detection, alerts, workers, cameras, live
+├── ai/                # ppe_detector, fire_detector, smoke_detector
+├── rules/             # compliance_engine, zone_rules, violation_tracker
+├── alerts/            # alert_manager (dedup cooldown)
+├── database/          # models (schema) + database (MySQL CRUD)
+└── utils/             # video sampling, evidence snapshots, logger
+```
+
+---
+
+## 🚀 Setup
+
+### Prerequisites
+Python 3.10+ • Node 18+ • MySQL 8.0
+
+### 1. Backend
+```bash
+python -m venv venv
+venv\Scripts\activate                  # Windows
+pip install -r requirements.txt
+
+copy .env.example .env                 # apna MySQL password + AI_MODE=REAL
+python -m uvicorn backend.main:app --reload --port 8000
+```
+
+### 2. Frontend
+```bash
+cd frontend
+npm install
+npm run dev                            # http://localhost:5173
+```
+
+### 3. Models & Videos (gitignored — Drive se)
+Large assets GitHub par nahi hote (`.gitignore`), team ke liye **Google Drive** par:
+```
+models/ppe_model.pt          # PPE YOLOv8 (trained)
+models/fire_smoke_model.pt   # Fire/Smoke YOLOv8 (trained)
+videos/compliant.mp4         # free stock (pexels.com)
+videos/violation.mp4
+videos/fire_smoke.mp4
+```
+Models ke bina system **automatically DEMO MODE** mein chalta hai (honestly labeled).
+
+---
+
+## 🧠 Model Training (reproduce karne ke liye)
+
+| | PPE Model | Fire/Smoke Model |
+|---|---|---|
+| Dataset | Roboflow PPE — 1,416 images, 11 classes | Roboflow "Fire and smoke" (YOLOv8) |
+| Base | YOLOv8n | YOLOv8n |
+| Training | Colab T4 GPU, 30 epochs, imgsz 640 | Colab T4 GPU, 30 epochs, imgsz 640 |
+| Metrics | **Precision 0.75 • Recall 0.53 • mAP50 0.56** | dataset-dependent |
+| Notebook | `notebooks/ppe_training.ipynb` | `notebooks/fire_smoke_training.ipynb` |
+
+---
+
+## 🔌 API Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/health` | Mode (DEMO/REAL) + model status + supported classes |
+| GET | `/api/live/stream?camera=0` | **Live webcam MJPEG stream with boxes** |
+| GET | `/api/stats?mode=` | Worker/violation/fire/smoke stats |
+| GET | `/api/workers?mode=` | Per-worker PPE status |
+| GET | `/api/alerts?mode=` | Incidents (MySQL se, evidence URLs ke saath) |
+| GET | `/api/reports?mode=` | REAL: MySQL trends • DEMO: sample |
+| GET | `/api/cameras` | Camera list (demo; RTSP future scope) |
+| GET | `/api/detections?video=&mode=` | Video analysis → bounding boxes |
+| POST | `/api/analyze-video?video=` | Full analysis + incidents + evidence |
+| GET | `/videos/*`, `/evidence/*` | Static media |
+
+`mode=DEMO` → labeled sample data • `mode=REAL` → **sirf asli model/DB data** (kabhi demo fallback nahi).
+
+---
+
+## 🗄️ MySQL Schema
+
+```sql
+incidents     — id, type(PPE/FIRE/SMOKE), severity, message, camera, zone,
+                worker_id, frame_url, created_at   [INDEX type, created_at]
+daily_stats   — stat_date(PK), total_workers, compliant_workers,
+                ppe_violations, fire_incidents, smoke_incidents
+```
+
+---
+
+## 🎭 DEMO vs REAL — Honesty Policy
+
+- **DEMO MODE:** amber banner, clearly labeled sample data
+- **REAL MODE:** trained models + MySQL ka asli data; error par **khali result**, demo fallback nahi
+- Vest **absence** ko violation **nahi** bola jata (dataset mein 'no_vest' class nahi) — vest sirf informational
+- System kabhi fake detections claim **nahi** karta
+
+---
+
+## ⚠️ Honest Limitations
+
+- Dataset mein explicit "no-vest" class nahi → vest sirf informational
+- CPU inference ~10-20 sec/video; live webcam ~2-4 FPS (production: GPU)
+- Reports trends ko 1+ din ka data chahiye (shuru mein sparse)
+- Recorded videos + webcam; external CCTV (RTSP) future scope
+
+## 🔮 Future Scope
+
+RTSP/CCTV streams • GPU inference • Socket.IO push alerts • Worker tracking (frame-to-frame IDs) • PostgreSQL • Face blurring (privacy) • SMS/WhatsApp alerts
+
+---
+
+## 🛠️ Tech Stack
+
+React • Vite • Tailwind CSS • FastAPI • Ultralytics YOLOv8 • OpenCV • MySQL 8.0 • Roboflow • Google Colab
+
+---
+
+**SafeVision AI — Hackathon 2026** 🦺⚡
+
+===== FILE: requirements.txt =====
+fastapi
+uvicorn[standard]
+python-dotenv
+python-multipart
+ultralytics
+opencv-python
+numpy
+pillow
+mysql-connector-python
+

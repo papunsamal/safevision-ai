@@ -1,5 +1,4 @@
 import os
-
 from ..config import settings
 from ..utils.logger import get_logger
 
@@ -20,8 +19,8 @@ def _load():
             _model_classes = list(_model.names.values())
             logger.info(f"Custom PPE model loaded | classes={_model_classes}")
         else:
-            # HONESTY: generic YOLO sirf 'person' jaanta hai — use PPE detector
-            # kehna fake claim hota. Isliye PPE detection disabled.
+            # HONESTY: generic YOLO sirf 'person' jaanta hai — ise PPE detector
+            # kehna fake claim hoga. Model missing -> PPE detection OFF (no fake AI).
             _model = False
             _model_classes = []
             logger.warning("Custom PPE model NOT found -> PPE detection disabled (no fake AI)")
