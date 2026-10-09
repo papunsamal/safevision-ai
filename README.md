@@ -1,102 +1,139 @@
 # 🦺 SafeVision AI
-
 ### See Risks. Detect Violations. Respond Faster.
 
 **SafeVision AI** is an AI-powered factory safety monitoring system developed for **BPUT Hackathon 2026 — Problem Statement 6: Factory Safety Monitoring & Hazard Detection**.
 
-It uses custom-trained YOLOv8 models to detect Personal Protective Equipment (PPE) violations, fire, and smoke from webcam feeds and recorded videos. Incidents are stored in MySQL, visual evidence is captured, and the React dashboard provides safety monitoring, incident tracking, and compliance reports.
+It uses custom-trained YOLOv8 models to detect PPE violations, including missing helmets, fire, and smoke in live webcam feeds and recorded videos. The system generates location-aware alerts, captures visual evidence, stores incidents in MySQL, and provides compliance analytics through an interactive dashboard.
 
-> **Core Principle:** SafeVision AI follows an honesty-first DEMO/REAL architecture. It never presents fabricated detections as genuine AI results.
+Built with an **honesty-first architecture**, SafeVision AI clearly distinguishes demonstration data from real AI inference. DEMO mode is labeled, and REAL mode never substitutes fabricated detections when inference fails.
+
+**Team Name:** InovaBuild  
+**Team ID:** BH26PS06T051
+
+---
+
+## 📑 Table of Contents
+
+- [Key Features](#-key-features)
+- [System Architecture](#️-system-architecture)
+- [Technology Stack](#️-technology-stack)
+- [Prerequisites](#-prerequisites)
+- [Installation and Setup](#-installation-and-setup)
+- [AI Models and Training](#-ai-models-and-training)
+- [API Reference](#-api-reference)
+- [Database Schema](#️-database-schema)
+- [DEMO vs REAL Mode](#-demo-vs-real-mode)
+- [Known Limitations](#️-known-limitations)
+- [Future Scope](#-future-scope)
+- [Project Structure](#-project-structure)
+- [Contributing and Attribution](#-contributing-and-attribution)
 
 ---
 
 ## ✨ Key Features
 
-- 🔴 **Live Webcam Detection:** Real-time YOLO inference with bounding-box overlays.
-- 🧠 **Custom YOLOv8 Models:** Separate PPE and fire/smoke detection models.
-- 👷 **PPE Compliance:** Supports person, helmet, no-helmet, vest, gloves, boots, and goggles classes when available in the trained model.
-- 🔥 **Fire & Smoke Detection:** Tracks continuous hazard events and reduces duplicate incidents across frames.
-- 🚨 **Smart Alerts:** MySQL-backed 60-second cooldown to prevent repeated alerts.
-- 📸 **Evidence Capture:** Saves JPEG snapshots of detected violations.
-- 🗄️ **MySQL Persistence:** Stores incidents, daily statistics, and alert cooldown data.
-- 📊 **Real Reports:** Generates compliance statistics and incident trends from database records.
-- 🗺️ **Zone-Based Alerts:** Maps camera IDs to physical zones through `configs/zones.json`.
-- 🎭 **DEMO / REAL Modes:** Separates sample data from genuine AI inference.
-- 📓 **Training Notebooks:** Includes YOLOv8 training notebooks for reproducible model fine-tuning.
+| Feature | Description |
+|---|---|
+| 🔴 Live Webcam Detection | Real-time YOLO inference with server-side bounding boxes through an MJPEG stream. |
+| 🧠 Custom-Trained AI Models | Separate YOLOv8 models for PPE detection and fire/smoke detection. |
+| 👷 PPE Compliance Analysis | Spatial matching between people and detected safety equipment using IoU and positional rules. |
+| 🔥 Fire and Smoke Tracking | Counts continuous fire/smoke events as incidents rather than counting every sampled frame. |
+| 🚨 Smart Alert Management | MySQL-backed 60-second deduplication with camera, zone, rule, and worker context. |
+| 📸 Visual Evidence | Saves JPEG snapshots of detected violations in `evidence/alerts/`. |
+| 🗄️ MySQL Persistence | Stores incidents, daily statistics, and alert cooldown state. |
+| 📊 Analytics Dashboard | Displays compliance trends and incident reports using database aggregations. |
+| 🎭 DEMO and REAL Modes | Clearly separates sample data from actual model inference. |
+| 🗺️ Zone-Based Monitoring | Associates cameras and incidents with configured physical locations. |
+| 📓 Reproducible Training | Includes Jupyter notebooks for training the PPE and fire/smoke models. |
 
 ---
 
 ## 🏗️ System Architecture
 
 ```text
-┌─────────────────────────┐
-│     React Frontend      │
-│  Vite + Tailwind CSS    │
-└────────────┬────────────┘
-             │ HTTP / JSON
-             ▼
-┌─────────────────────────┐
-│     FastAPI Backend     │
-│        Port 8000        │
-└────────────┬────────────┘
-             │
-       ┌─────┼───────────┐
-       ▼     ▼           ▼
-   ┌──────┐ ┌────────┐ ┌─────────┐
-   │ YOLO │ │ Rules  │ │  MySQL  │
-   │  AI  │ │ Engine │ │Database │
-   └──┬───┘ └───┬────┘ └────┬────┘
-      └─────────┼───────────┘
-                ▼
-       ┌─────────────────┐
-       │ Alerts & Evidence│
-       └─────────────────┘
+┌─────────────────────────────┐
+│     React Frontend          │
+│   Vite + Tailwind CSS       │
+└──────────────┬──────────────┘
+               │ HTTP / JSON
+               ▼
+┌─────────────────────────────┐
+│      FastAPI Backend        │
+│       Port: 8000            │
+└──────────────┬──────────────┘
+               │
+       ┌───────┼────────┬──────────┐
+       ▼       ▼        ▼          ▼
+    AI/YOLO   Rules   Database   Utilities
+       │       │        │          │
+       ▼       ▼        ▼          ▼
+      PPE   Compliance  MySQL    Video Frames
+   Fire/Smoke  Engine   Incidents Evidence
+                       Statistics Logging
+                          │
+                          ▼
+                    Alert Manager
+                  60s Deduplication
+                          │
+                          ▼
+                  Safety Incidents
 ```
 
-### Detection Workflow
+### Backend Modules
 
-1. Capture frames from a webcam or recorded video.
-2. Run the available YOLOv8 detection models.
-3. Associate PPE detections with people using spatial matching.
-4. Apply compliance rules and temporal confirmation.
-5. Generate incidents for confirmed violations.
-6. Capture evidence snapshots and save incident records to MySQL.
-7. Display monitoring information, alerts, and reports in the dashboard.
+| Module | Responsibility |
+|---|---|
+| `backend/main.py` | Application entry point, CORS, static files, and database initialization. |
+| `backend/config.py` | Environment variables and application settings. |
+| `backend/api/detection.py` | Video analysis, frame merging, event counting, and detection timelines. |
+| `backend/api/live.py` | Webcam capture and MJPEG streaming with detection overlays. |
+| `backend/api/alerts.py` | Incident retrieval and reporting endpoints. |
+| `backend/api/workers.py` | Worker PPE compliance and statistics. |
+| `backend/api/cameras.py` | Camera inventory and zone assignments. |
+| `backend/ai/ppe_detector.py` | PPE model loading and inference. |
+| `backend/ai/fire_smoke_detector.py` | Fire and smoke model loading and inference. |
+| `backend/rules/compliance_engine.py` | Spatial equipment matching and compliance rules. |
+| `backend/rules/zone_rules.py` | Camera-to-zone mapping. |
+| `backend/rules/violation_tracker.py` | Recent incidents and persistence. |
+| `backend/alerts/alert_manager.py` | Alert severity, cooldown, and deduplication. |
+| `backend/database/database.py` | Database connections and query execution. |
+| `backend/database/models.py` | Database schema definitions. |
+| `backend/utils/video.py` | Frame sampling and video-processing helpers. |
+| `backend/utils/evidence.py` | Evidence snapshot generation. |
+| `backend/utils/logger.py` | Structured application logging. |
 
 ---
 
 ## 🛠️ Technology Stack
 
-| Layer | Technology |
+| Layer | Technologies |
 |---|---|
-| Frontend | React 19, Vite |
-| Styling | Tailwind CSS |
-| API Communication | Axios |
-| Backend | FastAPI, Uvicorn |
-| AI Detection | Ultralytics YOLOv8 |
-| Video Processing | OpenCV, NumPy |
-| Database | MySQL 8.0 |
-| Charts | Recharts |
-| Dataset Management | Roboflow |
+| Frontend | React 19, Vite 8, Tailwind CSS |
+| Backend | Python, FastAPI, Uvicorn |
+| AI / Computer Vision | Ultralytics YOLOv8, OpenCV, NumPy |
+| Database | MySQL 8.0, mysql-connector-python |
+| Data Visualization | Recharts |
+| Dataset Annotation | Roboflow |
 | Model Training | Google Colab, NVIDIA T4 GPU |
-| Language | Python, JavaScript |
+| Runtime | Python 3.10+, Node.js 18+ |
 
 ---
 
 ## 📋 Prerequisites
 
-Install the following before running the project:
+Before running SafeVision AI, install the following:
 
-- Python 3.10 or newer
-- Node.js 18 or newer
-- MySQL Server 8.0
+- Python 3.10 or later
+- Node.js 18 or later
+- npm
+- MySQL 8.0
 - Git
 - A webcam for live detection (optional)
-- Trained YOLOv8 model weights for REAL mode
+- Trained YOLOv8 model files for REAL mode
 
 ---
 
-## 🚀 Installation & Quick Start
+## 🚀 Installation and Setup
 
 ### 1. Clone the Repository
 
@@ -105,45 +142,37 @@ git clone https://github.com/papunsamal/safevision-ai.git
 cd safevision-ai
 ```
 
-### 2. Create a Python Virtual Environment
+### 2. Set Up the Python Backend
 
-**Windows:**
+Create a virtual environment:
 
 ```bash
 python -m venv venv
+```
+
+Activate it on Windows:
+
+```bash
 venv\Scripts\activate
 ```
 
-**Linux / macOS:**
-
-```bash
-python3 -m venv venv
-source venv/bin/activate
-```
-
-### 3. Install Backend Dependencies
-
-From the project root:
+Install dependencies:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. Configure Environment Variables
+### 3. Configure Environment Variables
 
-**Windows:**
+Create your environment file:
 
 ```bash
 copy .env.example .env
 ```
 
-**Linux / macOS:**
+Open `.env` and configure the required settings, including your MySQL credentials and AI mode.
 
-```bash
-cp .env.example .env
-```
-
-Update `.env` with your local configuration:
+Example configuration:
 
 ```env
 AI_MODE=DEMO
@@ -151,43 +180,41 @@ AI_MODE=DEMO
 MYSQL_HOST=localhost
 MYSQL_PORT=3306
 MYSQL_USER=root
-MYSQL_PASSWORD=your_password
-MYSQL_DATABASE=safevision_ai
+MYSQL_PASSWORD=your_mysql_password
+MYSQL_DATABASE=safevision
 ```
 
-Replace `your_password` with your MySQL password.
+**Important:** Replace the example password with your own MySQL password. Never commit `.env` or real credentials to GitHub.
 
-**Important:** Never commit `.env` or real database credentials to GitHub.
+Use `AI_MODE=REAL` only after placing the trained model files at the expected paths.
 
-### 5. Create the MySQL Database
+### 4. Start the Backend
 
-Open MySQL and execute:
-
-```sql
-CREATE DATABASE safevision_ai;
-```
-
-Ensure that the database connection settings match your `.env` configuration.
-
-Database tables must be created by the application's initialization logic or the project's database setup scripts.
-
-### 6. Start the Backend
-
-Run this command from the project root:
+From the project root:
 
 ```bash
 python -m uvicorn backend.main:app --reload --port 8000
 ```
 
-Backend URL:
+Backend API:
 
-`http://localhost:8000`
+```text
+http://localhost:8000
+```
+
+Health check:
+
+```text
+http://localhost:8000/health
+```
 
 Interactive API documentation:
 
-`http://localhost:8000/docs`
+```text
+http://localhost:8000/docs
+```
 
-### 7. Start the Frontend
+### 5. Set Up the Frontend
 
 Open a second terminal:
 
@@ -197,26 +224,65 @@ npm install
 npm run dev
 ```
 
-Frontend URL:
+Open the frontend URL displayed by Vite, normally:
 
-`http://localhost:5173`
+```text
+http://localhost:5173
+```
 
-Keep both backend and frontend terminals running while using the application.
+Keep both the backend and frontend terminals running.
 
 ---
 
-## 🧠 AI Models
+## 🧠 AI Models and Training
 
-SafeVision AI is designed to use two custom-trained YOLOv8 models.
+SafeVision AI is designed to use two domain-specific YOLOv8 models.
 
-| Model | Purpose |
-|---|---|
-| `ppe_model.pt` | Detects the PPE classes included in the trained model |
-| `fire_smoke_model.pt` | Detects fire and smoke classes included in the trained model |
+| Parameter | PPE Model | Fire/Smoke Model |
+|---|---|---|
+| Architecture | YOLOv8n | YOLOv8n |
+| Dataset | Industrial PPE | Fire and Smoke |
+| Dataset Size | 1,416 annotated images | Approximately 2,000 frames |
+| Training Platform | Google Colab T4 GPU | Google Colab T4 GPU |
+| Epochs | 30 | 30 |
+| Image Size | 640 × 640 | 640 × 640 |
+| Precision | 0.75 | Dataset-dependent |
+| Recall | 0.53 | Dataset-dependent |
+| mAP@50 | 0.56 | Dataset-dependent |
+| Notebook | `notebooks/ppe_training.ipynb` | `notebooks/fire_smoke_training.ipynb` |
 
-### Model Configuration
+*Reported metrics are project-provided values and should be verified against the actual training results before evaluation.*
 
-Expected model paths:
+### PPE Model Classes
+
+The reported PPE model classes are:
+
+```text
+Person
+Helmet
+No Helmet
+None
+Vest
+Gloves
+Boots
+Goggles
+No Boots
+No Gloves
+No Goggle
+```
+
+### Fire and Smoke Model Classes
+
+```text
+Fire
+Smoke
+```
+
+### Model File Locations
+
+Large model files are excluded from GitHub and must be obtained separately.
+
+Place the files at these paths:
 
 ```text
 models/
@@ -224,71 +290,7 @@ models/
 └── fire_smoke_model.pt
 ```
 
-The model files are not included in the repository by default because trained weights can be large.
-
-### Training Configuration
-
-The included training workflow is designed around:
-
-- YOLOv8n architecture
-- Roboflow datasets
-- Google Colab
-- NVIDIA T4 GPU
-- 640 × 640 image size
-- 30 training epochs
-
-Actual training results depend on dataset quality, model configuration, and training parameters.
-
-### Training Notebooks
-
-```text
-notebooks/
-├── ppe_training.ipynb
-└── fire_smoke_training.ipynb
-```
-
-**Important:** A class can only be detected reliably if the selected model was trained to recognize it. Verify each model's class names before enabling corresponding safety rules.
-
----
-
-## 🎭 DEMO Mode vs REAL Mode
-
-SafeVision AI separates demonstration data from genuine model inference.
-
-### DEMO Mode
-
-- Intended for demonstrations and interface testing.
-- Uses sample data where configured.
-- Displays a clear DEMO MODE indicator.
-- Does not claim that sample detections are genuine AI predictions.
-
-### REAL Mode
-
-- Requires valid trained model weights.
-- Runs actual model inference.
-- Uses real video or webcam frames.
-- Must not silently replace failed inference with fabricated detections.
-- Should report missing models or inference failures clearly.
-
-Set the mode through the environment configuration:
-
-```env
-AI_MODE=DEMO
-```
-
-For genuine inference:
-
-```env
-AI_MODE=REAL
-```
-
-**Note:** Automatic fallback to DEMO mode must be implemented explicitly by the application. Confirm the actual startup and error-handling behavior in the code before relying on it.
-
----
-
-## 📹 Video Assets
-
-Optional sample videos can be placed in:
+Required video assets, if used, should be placed in:
 
 ```text
 videos/
@@ -297,237 +299,198 @@ videos/
 └── fire_smoke.mp4
 ```
 
-Example usage:
+If the model files are unavailable, use the clearly labeled DEMO mode.
 
-- `compliant.mp4` — workers following PPE requirements.
-- `violation.mp4` — footage containing a potential PPE violation.
-- `fire_smoke.mp4` — footage containing visible fire or smoke.
+**Why custom-trained models?**
 
-These are expected filenames for demonstration assets, not a claim that the files are already included.
-
-Large video files, trained model weights, virtual environments, and generated evidence should be excluded from Git.
+Generic COCO-pretrained YOLO models do not provide all the specialized PPE and fire/smoke classes required by this project. Domain-specific training allows the system to learn the relevant safety categories from appropriately annotated industrial imagery.
 
 ---
 
-## 🔌 API Endpoints
+## 🔌 API Reference
 
-The following endpoints describe the intended API interface. Availability depends on the routes implemented in the current codebase.
+The backend exposes the following endpoints. Exact behavior should be verified against the running application and its route definitions.
 
-| Method | Endpoint | Purpose |
+| Method | Endpoint | Description |
 |---|---|---|
-| GET | `/health` | Backend and AI health status |
-| GET | `/api/videos` | List available videos |
-| GET | `/api/detections` | Retrieve or analyze detections, depending on implementation |
-| POST | `/api/analyze-video` | Analyze a video and process alerts/evidence |
-| GET | `/api/stats` | Safety statistics |
-| GET | `/api/workers` | Worker PPE status |
-| GET | `/api/alerts` | Retrieve recent incidents |
-| GET | `/api/reports` | Compliance and incident reports |
-| GET | `/api/cameras` | Camera inventory and zone mapping |
-| GET | `/api/live/stream` | Live webcam stream |
-| GET | `/videos/*` | Serve configured video assets |
-| GET | `/evidence/*` | Serve saved evidence images |
+| GET | `/health` | System health, active mode, and model availability. |
+| GET | `/api/videos` | Lists available MP4 video files. |
+| GET | `/api/detections?video=&mode=` | Analyzes a video and returns detections and statistics. |
+| POST | `/api/analyze-video?video=&mode=` | Runs video analysis and triggers configured incident-processing side effects. |
+| GET | `/api/stats?mode=` | Returns worker, violation, and incident statistics. |
+| GET | `/api/workers?mode=` | Returns worker PPE compliance information. |
+| GET | `/api/alerts?mode=` | Retrieves recent incidents and evidence URLs. |
+| GET | `/api/reports?mode=` | Returns compliance and incident trend data. |
+| GET | `/api/cameras` | Lists configured cameras and zone assignments. |
+| GET | `/api/live/stream?camera=0` | Streams live webcam frames with detection overlays. |
+| GET | `/videos/*` | Serves available video files. |
+| GET | `/evidence/*` | Serves captured evidence images. |
 
-### API Documentation
+### Mode Selection
 
-When the backend is running, visit:
-
-`http://localhost:8000/docs`
-
-### Detection Mode
-
-Where supported by an endpoint, the mode may be specified using a query parameter:
-
-```text
-?mode=REAL
-```
-
-or:
+Endpoints that support mode selection accept:
 
 ```text
 ?mode=DEMO
 ```
 
-The supported HTTP methods, parameters, and response formats should be verified against the actual FastAPI route definitions.
-
----
-
-## 🗄️ Database Design
-
-SafeVision AI uses MySQL 8.0 for persistent incident records and reporting.
-
-### Main Tables
-
-#### 1. `incidents`
-
-Stores information about safety incidents:
-
-- Incident type
-- Severity
-- Incident message
-- Camera ID
-- Physical zone
-- Worker ID, if available
-- Evidence image path
-- Timestamp
-
-#### 2. `daily_stats`
-
-Stores daily safety statistics, where implemented:
-
-- Total workers
-- Compliant workers
-- PPE violations
-- Fire incidents
-- Smoke incidents
-
-#### 3. `alert_cooldowns`
-
-Stores alert deduplication information to reduce repeated notifications for the same event.
-
-### Database Reliability
-
-- Use parameterized SQL queries.
-- Keep database credentials in environment variables.
-- Handle database connection errors safely.
-- Verify that reports use actual database records.
-- Ensure that cooldown persistence survives application restarts.
-
-The presence of these table names in the documentation does not itself create them; the application's schema initialization or migration process must do so.
-
----
-
-## 🗺️ Zone-Based Monitoring
-
-Camera-to-zone mappings are configured through:
+or:
 
 ```text
-configs/zones.json
+?mode=REAL
 ```
 
-Example zone names:
+When the parameter is omitted, the backend uses its configured default.
 
-- Production Area
-- Warehouse
-- Boiler Area
-- Entry Gate
-- Live Monitoring
+### Example Requests
 
-A camera mapping can associate a camera ID with a physical zone so that generated incidents can identify where a potential hazard occurred.
+Check system health:
 
-Example configuration structure:
-
-```json
-{
-  "CAM-01": "Production Area",
-  "CAM-02": "Warehouse",
-  "CAM-03": "Boiler Area",
-  "CAM-04": "Entry Gate",
-  "LIVE": "Live Monitoring"
-}
+```bash
+curl http://localhost:8000/health
 ```
 
-Use the exact JSON structure expected by the project's zone configuration loader.
+List available videos:
+
+```bash
+curl http://localhost:8000/api/videos
+```
+
+Retrieve incidents:
+
+```bash
+curl "http://localhost:8000/api/alerts?mode=REAL"
+```
+
+Get reporting data:
+
+```bash
+curl "http://localhost:8000/api/reports?mode=REAL"
+```
+
+Analyze a video:
+
+```bash
+curl -X POST "http://localhost:8000/api/analyze-video?video=violation.mp4&mode=REAL"
+```
+
+**Response integrity:** Responses should identify their operating mode so consumers can distinguish real inference results from demonstration fixtures.
 
 ---
 
-## ⚖️ PPE Compliance Rules
+## 🗄️ Database Schema
 
-The compliance engine is intended to associate people with detected PPE objects and evaluate required safety equipment.
+SafeVision AI uses MySQL 8.0 to persist incident information, reporting statistics, and alert cooldown state.
 
-Potential PPE classes include:
+### 1. `incidents`
 
-- Person
-- Helmet
-- No helmet
-- Safety vest
-- Gloves
-- Safety boots
-- Goggles
+Stores detected safety events.
 
-### Important Limitations
+| Column | Description |
+|---|---|
+| `id` | Unique incident identifier. |
+| `type` | Incident category, such as PPE, FIRE, or SMOKE. |
+| `severity` | LOW, MEDIUM, HIGH, or CRITICAL. |
+| `message` | Description of the incident. |
+| `camera` | Camera identifier. |
+| `zone` | Physical location of the incident. |
+| `worker_id` | Worker identifier, when applicable. |
+| `frame_url` | Path to the evidence snapshot. |
+| `created_at` | Incident creation timestamp. |
 
-- Missing helmet detection depends on the model's trained classes and compliance logic.
-- Missing vest detection cannot be reliably claimed unless the system has a suitable detection or classification method.
-- Gloves, boots, and goggles must be supported by the trained model and verified during testing.
-- Spatial matching can associate the wrong PPE object with a person in crowded scenes.
-- Detection confidence alone does not establish a confirmed safety violation.
+### 2. `daily_stats`
 
-Safety rules should be configurable according to the requirements of each monitored zone.
+Stores daily aggregated compliance statistics.
+
+| Column | Description |
+|---|---|
+| `stat_date` | Reporting date and primary key. |
+| `total_workers` | Total workers counted. |
+| `compliant_workers` | Workers meeting applicable compliance rules. |
+| `ppe_violations` | PPE violation count. |
+| `fire_incidents` | Fire incident count. |
+| `smoke_incidents` | Smoke incident count. |
+| `updated_at` | Last update timestamp. |
+
+### 3. `alert_cooldowns`
+
+Stores deduplication state so repeated events do not continuously generate alerts.
+
+| Column | Description |
+|---|---|
+| `ckey` | Composite alert key. |
+| `last_seen` | Last-seen Unix timestamp. |
+
+The schema is initialized by the backend during startup, according to the project's database initialization logic.
+
+If MySQL is unavailable, the application is designed to degrade gracefully where supported. Database-dependent features may return incomplete or empty results until connectivity is restored.
 
 ---
 
-## 🚨 Alert Management
+## 🎭 DEMO vs REAL Mode
 
-The alert manager is designed to reduce duplicate incident creation.
+SafeVision AI separates sample data from actual model inference.
 
-Expected workflow:
+| Aspect | DEMO Mode | REAL Mode |
+|---|---|---|
+| Purpose | Demonstration and UI testing | Actual AI inference |
+| Data Source | Sample fixtures | YOLOv8 model output |
+| UI Indicator | Visible DEMO MODE banner | Normal operational interface |
+| Model Requirement | Trained models not required | Required model files must be available |
+| Detection Failure | Sample behavior, clearly labeled | Must not silently substitute demo detections |
+| Reporting | Demonstration data may be used | Based on actual persisted analysis data |
+| Live Webcam | Not a substitute for real inference | Requires an accessible camera and working model |
+
+### REAL Mode Requirements
+
+The expected model files are:
 
 ```text
-AI Detection
-     ↓
-Compliance Rules
-     ↓
-Temporal Confirmation
-     ↓
-Violation Tracker
-     ↓
-Alert Cooldown Check
-     ↓
-Evidence Snapshot
-     ↓
-MySQL Incident Record
-     ↓
-Dashboard Alert
+models/ppe_model.pt
+models/fire_smoke_model.pt
 ```
 
-### Alert Cooldown
+File existence alone does not prove that a model is valid. REAL mode must also handle model-loading failures, inference errors, unavailable cameras, and missing video assets honestly.
 
-The configured cooldown is 60 seconds.
+### PPE Compliance Policy
 
-The cooldown should prevent repeated alerts for the same tracked event while allowing distinct incidents to be recorded.
+The reported training classes do not include an explicit `no_vest` class. Therefore, vest absence must not be automatically treated as a confirmed violation.
 
-Its actual behavior depends on the event key, camera ID, violation type, database state, and alert manager implementation.
+The current policy focuses on helmet non-compliance when the applicable model outputs and compliance rules support that conclusion.
+
+This reduces unsupported violation claims and helps maintain trust in the system's results.
 
 ---
 
-## 📸 Evidence Capture
+## ⚠️ Known Limitations
 
-When a violation is confirmed, the evidence subsystem is designed to save a JPEG snapshot.
+| Limitation | Current Impact |
+|---|---|
+| No `no_vest` class | Missing vests cannot reliably be confirmed as violations. |
+| CPU-bound inference | Recorded video analysis may take approximately 10–20 seconds per clip. |
+| Limited live processing speed | Webcam processing may run at approximately 2–4 FPS, depending on hardware and scene complexity. |
+| Limited reporting history | Trend charts may show insufficient data when few analyses have been recorded. |
+| Single-camera scope | Current prototype focuses on a local webcam and prerecorded MP4 files. |
+| Position-based worker matching | Occlusion and rapid movement may fragment worker identities. |
+| Dataset-dependent accuracy | Real-world performance may differ from training and validation results. |
 
-Expected evidence directory:
-
-```text
-evidence/
-└── alerts/
-```
-
-Evidence can help safety officers review incidents and understand the context of an alert.
-
-Recommended practices:
-
-- Include timestamps in evidence metadata.
-- Associate each snapshot with its incident record.
-- Avoid exposing evidence publicly without access controls.
-- Configure retention and cleanup policies.
-- Verify that failed snapshot writes are handled safely.
+Performance estimates depend on hardware, video duration, resolution, and model configuration.
 
 ---
 
-## 📊 Dashboard & Reports
+## 🔮 Future Scope
 
-The React dashboard is designed to provide:
+| Priority | Enhancement | Proposed Implementation |
+|---|---|---|
+| High | Multi-camera RTSP support | Add asynchronous camera ingestion and shared detector instances. |
+| High | GPU-accelerated inference | Deploy with CUDA-enabled inference infrastructure. |
+| Medium | Real-time push notifications | Add Socket.IO or SSE event delivery from alert callbacks. |
+| Medium | Improved worker tracking | Introduce learned re-identification embeddings. |
+| Low | Privacy-preserving evidence | Add face blurring before saving snapshots. |
+| Low | SMS and email escalation | Integrate notification adapters based on severity. |
+| Low | Database portability | Introduce a repository abstraction supporting additional SQL databases. |
 
-- Safety overview and incident statistics
-- Live monitoring and detection overlays
-- PPE compliance status
-- Recent and historical alerts
-- Incident severity and zone information
-- Compliance and incident trend charts
-
-Reports should be generated from real database records in REAL mode. DEMO data should remain clearly identified.
-
-Meaningful trend analysis requires sufficient historical records and consistent incident classification.
+These are planned improvements, not claims of already implemented functionality.
 
 ---
 
@@ -535,154 +498,95 @@ Meaningful trend analysis requires sufficient historical records and consistent 
 
 ```text
 safevision-ai/
-├── README.md
-├── requirements.txt
-├── .env.example
-├── .gitignore
 │
 ├── backend/
-│   ├── main.py
-│   ├── config.py
+│   ├── ai/
+│   │   ├── ppe_detector.py
+│   │   └── fire_smoke_detector.py
+│   │
+│   ├── alerts/
+│   │   └── alert_manager.py
+│   │
 │   ├── api/
 │   │   ├── detection.py
 │   │   ├── live.py
 │   │   ├── alerts.py
 │   │   ├── workers.py
 │   │   └── cameras.py
-│   ├── ai/
-│   │   ├── ppe_detector.py
-│   │   └── fire_smoke_detector.py
+│   │
+│   ├── database/
+│   │   ├── models.py
+│   │   └── database.py
+│   │
 │   ├── rules/
 │   │   ├── compliance_engine.py
 │   │   ├── zone_rules.py
 │   │   └── violation_tracker.py
-│   ├── alerts/
-│   │   └── alert_manager.py
-│   ├── database/
-│   │   ├── models.py
-│   │   └── database.py
-│   └── utils/
-│       ├── video.py
-│       ├── evidence.py
-│       └── logger.py
+│   │
+│   ├── utils/
+│   │   ├── video.py
+│   │   ├── evidence.py
+│   │   └── logger.py
+│   │
+│   ├── config.py
+│   └── main.py
 │
 ├── frontend/
-│   ├── package.json
-│   ├── vite.config.js
-│   ├── tailwind.config.js
-│   └── src/
-│       ├── components/
-│       │   ├── Sidebar.jsx
-│       │   ├── StatCard.jsx
-│       │   └── AlertCard.jsx
-│       ├── pages/
-│       │   ├── Dashboard.jsx
-│       │   ├── Monitoring.jsx
-│       │   ├── Alerts.jsx
-│       │   └── Reports.jsx
-│       ├── services/
-│       │   └── apiClient.js
-│       └── App.jsx
+│   ├── src/
+│   │   ├── components/
+│   │   ├── pages/
+│   │   └── services/
+│   └── vite.config.js
 │
 ├── configs/
-│   ├── zones.json
-│   └── ppe_rules.json
+│   ├── ppe_rules.json
+│   └── zones.json
 │
+├── models/                     # Local model weights
+├── videos/                     # Local video assets
+├── evidence/                   # Generated evidence
 ├── notebooks/
 │   ├── ppe_training.ipynb
 │   └── fire_smoke_training.ipynb
 │
-├── models/
-│   ├── ppe_model.pt
-│   └── fire_smoke_model.pt
-│
-├── videos/
-│   ├── compliant.mp4
-│   ├── violation.mp4
-│   └── fire_smoke.mp4
-│
-└── evidence/
-    └── alerts/
+├── .env.example
+├── .gitignore
+├── README.md
+└── requirements.txt
 ```
 
-**Note:** This is the intended project structure. Files and assets may be absent if they have not yet been created locally or committed to the repository.
+*This structure documents the intended project layout; actual filenames should match the repository.*
+
+Large binary assets are excluded from version control to keep the repository manageable. Model weights and video assets can be distributed separately, subject to dataset and competition licensing requirements.
 
 ---
 
-## 🔍 Testing Checklist
+## 🔒 Security and Reliability
 
-Before presenting the project at the hackathon, verify the following.
-
-- [ ] Backend starts without import errors.
-- [ ] Frontend installs and builds successfully.
-- [ ] MySQL connection succeeds.
-- [ ] Required database tables are created.
-- [ ] `/health` returns the expected status.
-- [ ] DEMO mode is clearly indicated.
-- [ ] REAL mode loads the correct model weights.
-- [ ] Missing model files produce a clear error.
-- [ ] Webcam detection works on supported hardware.
-- [ ] Video analysis works with valid video files.
-- [ ] Bounding boxes match the actual detections.
-- [ ] PPE compliance rules handle missing equipment correctly.
-- [ ] Fire/smoke events do not create excessive duplicate incidents.
-- [ ] Evidence images are saved and accessible.
-- [ ] Incidents persist after a backend restart.
-- [ ] Alert cooldown behavior is verified.
-- [ ] Reports reflect database records.
-- [ ] Invalid requests and database errors are handled safely.
-
-A passing checklist should be based on actual execution and observed results, not documentation alone.
+- Keep database credentials and other secrets in `.env`.
+- Never commit real passwords, API keys, or private credentials.
+- Use parameterized SQL queries for database operations.
+- Validate uploaded video files and enforce reasonable file-size limits.
+- Handle unavailable cameras and invalid model files without crashing the application.
+- Keep DEMO and REAL data clearly distinguishable.
+- Verify that evidence URLs and database records refer to actual generated artifacts.
 
 ---
 
-## ⚠️ Known Limitations
+## 🤝 Contributing and Attribution
 
-- The prototype currently targets one local webcam.
-- Multi-camera RTSP/CCTV monitoring is planned for future versions.
-- CPU inference may be slower than GPU inference.
-- Worker tracking uses spatial association rather than advanced re-identification.
-- Missing vest detection requires an appropriate model or classification strategy.
-- Gloves, boots, and goggles detection depends on model capabilities.
-- Report quality depends on the quantity and quality of stored data.
-- Training quality depends on dataset coverage and annotation accuracy.
-- Actual API behavior depends on the implemented route handlers.
+SafeVision AI was developed for **BPUT Hackathon 2026 — Problem Statement 6**.
+
+The project uses third-party libraries and datasets that remain subject to their respective licenses and attribution requirements. Dataset sources and training details should be documented in the corresponding notebooks.
+
+Model weights may be distributed separately according to the team's access arrangements, dataset licensing, and competition guidelines.
+
+Contributions that improve detection reliability, reporting accuracy, safety compliance, and system transparency are welcome.
 
 ---
 
-## 🔮 Future Scope
+## 🦺 SafeVision AI
 
-- Multi-camera RTSP/CCTV integration
-- GPU-accelerated and batch inference
-- WebSocket or Server-Sent Events notifications
-- Advanced worker tracking and re-identification
-- Privacy-preserving face blurring
-- SMS and email alerts
-- Improved PPE compliance classification
-- PostgreSQL support
-- Production deployment and monitoring
-- Automated testing and model evaluation reports
+**See Risks. Detect Violations. Respond Faster.**
 
----
-
-## 🤝 Hackathon Information
-
-**Project:** SafeVision AI
-
-**Event:** BPUT Hackathon 2026
-
-**Problem Statement:** PS6 — Factory Safety Monitoring & Hazard Detection
-
-**Tagline:** See Risks. Detect Violations. Respond Faster.
-
-**Repository:** https://github.com/papunsamal/safevision-ai
-
-Built around an honesty-first DEMO/REAL architecture to support transparent AI demonstrations and factory safety monitoring.
-
----
-
-## 📜 Disclaimer
-
-SafeVision AI is a hackathon prototype intended to assist with safety monitoring. AI detections may be incorrect or incomplete and should not replace trained safety personnel, certified safety procedures, or independent emergency detection systems.
-
-Always validate model performance under real operating conditions before using the system for safety-critical decisions.
+*Built by Team InovaBuild for BPUT Hackathon 2026.*
