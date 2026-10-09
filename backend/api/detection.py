@@ -90,7 +90,9 @@ def _analyze(name: str, camera_id: str = "CAM-01", resolved_mode: str = None):
     evidence_frame = None
     evidence_score = -1
 
-    for idx, frame in video_utils.sample_frames(cap, every_n=15, max_frames=10):
+    # ✅ OPTIMIZATION: Increased density for smoother UI updates
+    # every_n=10 (process more frequently), max_frames=30 (cover more ground)
+    for idx, frame in video_utils.sample_frames(cap, every_n=10, max_frames=30):
         dets = ppe_detector.detect(frame) + fire_smoke_detector.detect_all(frame)
 
         if not dets:
