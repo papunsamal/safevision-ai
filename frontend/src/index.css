@@ -1,7 +1,60 @@
+/* ==============================
+   TAILWIND BASE CONFIGURATION
+   (SafeVision AI Global Styles)
+   ============================== */
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/**
+ * GLOBAL BODY STYLES
+ * - Sets the foundational dark theme (slate-950 background).
+ * - Ensures text is light (slate-100) for readability.
+ * - Applies font smoothing for a premium UI feel.
+ */
 body {
   @apply bg-slate-950 text-slate-100 antialiased;
+
+  /* Smooth scrolling for anchor links if any are added later */
+  scroll-behavior: smooth;
+}
+
+/**
+ * CUSTOM SELECTION COLOR
+ * - When users select text, it highlights in Emerald Green 
+ *   instead of the default browser blue. This matches our brand identity.
+ */
+::selection {
+  background-color: rgba(16, 185, 129, 0.3); /* emerald-500 with opacity */
+  color: #ffffff;
+}
+
+/**
+ * SCROLLBAR STYLING (Optional but Recommended for Demos)
+ * - Hides ugly default white scrollbars and replaces them 
+ *   with sleek dark ones that blend into the slate-950 background.
+ */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0f172a; /* slate-950 */
+}
+
+::-webkit-scrollbar-thumb {
+  background: #334155; /* slate-700 */
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #475569; /* slate-600 */
+}
+
+/* Firefox Support */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #334155 #0f172a;
 }

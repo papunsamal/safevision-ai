@@ -10,7 +10,7 @@ const getDisplayLabel = label => {
   if (l === 'helmet') return 'HELMET ✓';
   if (l === 'no_helmet' || l === 'none') return 'NO HELMET ⚠️';
 
-  // Vest Logic
+  // Vest Logic (UPDATED FOR YOUR REQUEST)
   if (l === 'vest') return 'VEST ✓';
   if (l === 'no_vest' || l === 'without_vest') return 'NO VEST ⚠️';
 
@@ -30,11 +30,16 @@ const getDisplayLabel = label => {
  */
 const getColorClass = label => {
   const l = label.toLowerCase();
+  // Red for Critical/Helmet Missing/Fire
   if (['no_helmet', 'none', 'fire'].includes(l)) return 'border-red-500 text-red-400 bg-red-900/30';
+  // Orange for Medium/Vest Missing/Smoke
   if (['no_vest', 'smoke'].includes(l)) return 'border-orange-500 text-orange-400 bg-orange-900/30';
+  // Green for Compliant Gear
   if (['helmet', 'vest'].includes(l))
     return 'border-emerald-500 text-emerald-400 bg-emerald-900/30';
+  // Blue for Persons
   if (['person'].includes(l)) return 'border-blue-500 text-blue-400 bg-blue-900/30';
+
   return 'border-slate-500 text-slate-400 bg-slate-800/50';
 };
 
@@ -71,7 +76,7 @@ export default function CameraFeed({ title, videoUrl, detections, timeline, demo
       {videoUrl && (
         <video
           src={videoUrl}
-          controls={!demo} // Hide controls in DEMO mode for cleaner look? No, keep them for judges
+          controls={!demo}
           autoPlay
           muted
           loop

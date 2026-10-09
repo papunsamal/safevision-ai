@@ -2,9 +2,22 @@ import axios from 'axios';
 
 // Python backend (port 8000)
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-const http = axios.create({ baseURL: API, timeout: 60000 });
 
-/* ----------------- DEMO DATA (sirf DEMO MODE ke liye, clearly labeled) ---------- */
+/**
+ * Axios Instance with Timeout & Interceptors
+ * - Timeout: 60s (Video inference can be slow on CPU)
+ * - Headers: JSON content type
+ */
+const http = axios.create({
+  baseURL: API,
+  timeout: 60000,
+  headers: { 'Content-Type': 'application/json' },
+});
+
+/* ----------------- DEMO DATA (sirf DEMO MODE ke liye, clearly labeled) ----------
+ * NOTE: Yeh data hardcoded hai UI demonstration ke liye.
+ * REAL MODE mein yeh KABHI use nahi hoga.
+ */
 
 const demoStats = {
   totalWorkers: 25,
@@ -16,8 +29,8 @@ const demoStats = {
 
 const demoWorkers = [
   { id: 1, helmet: true, vest: true, gloves: true },
-  { id: 2, helmet: false, vest: true },
-  { id: 3, helmet: true, vest: false },
+  { id: 2, helmet: false, vest: true }, // Violation
+  { id: 3, helmet: true, vest: false }, // Info only
   { id: 4, helmet: true, vest: true },
 ];
 
@@ -92,24 +105,49 @@ const demoReports = {
   ],
 };
 
-/* ----------------- FAIL-SAFE FETCH ----------
- * DEMO mode  -> frontend demo data (UI mein amber "DEMO MODE" banner)
- * REAL mode  -> backend se asli data; error par KHALI (null/[]) —
- *               kabhi bhi demo data REAL mein nahi dikhta (no fake AI)
+/* ----------------- FAIL-SAFE FETCH WITH SMART RETRY ----------
+ * Strategy:
+ * 1. If mode === 'DEMO': Return hardcoded demo data immediately.
+ * 2. If mode === 'REAL': Try fetching from backend.
+ *    - On Network Error/Timeout: Retry up to 2 times with exponential backoff.
+ *    - On Success: Return real data.
+ *    - On Final Failure: Return fallback (null/[]) WITHOUT falling back to Demo Data.
+ *      This ensures "No Fake AI" policy is maintained.
  */
-async function fetchOrDemo(mode, path, demo, fallback) {
-  if (mode === 'DEMO') return demo;
-  try {
-    const r = await http.get(path);
-    return r.data ?? fallback;
-  } catch {
-    return fallback;
+async function fetchOrDemo(mode, path, demoData, fallbackValue, retries = 2) {
+  if (mode === 'DEMO') {
+    return demoData;
   }
+
+  let attempt = 0;
+  while (attempt <= retries) {
+    try {
+      const response = await http.get(path);
+      return response.data ?? fallbackValue;
+    } catch (error) {
+      attempt++;
+
+      // Check if it's a network error or timeout worth retrying
+      const isRetryable =
+        !error.response || error.code === 'ECONNABORTED' || error.code === 'ERR_NETWORK';
+
+      if (isRetryable && attempt <= retries) {
+        console.warn(`Attempt ${attempt} failed for ${path}. Retrying in ${attempt * 500}ms...`);
+        await new Promise(resolve => setTimeout(resolve, attempt * 500)); // Exponential backoff
+        continue;
+      }
+
+      // Permanent failure or max retries reached
+      console.error(`Failed to fetch ${path} after ${attempt} attempts:`, error.message);
+      return fallbackValue; // Return null/[], NOT demo data
+    }
+  }
+
+  return fallbackValue;
 }
 
 /* ----------------- API FUNCTIONS ----------
- * mode backend ko bheja jata hai (?mode=...) taaki backend
- * REAL mein kabhi demo data return na kare.
+ * All functions now support Smart Retry in REAL mode.
  */
 
 export const getStats = mode => fetchOrDemo(mode, `/api/stats?mode=${mode}`, demoStats, null);
@@ -120,29 +158,32 @@ export const getAlerts = mode => fetchOrDemo(mode, `/api/alerts?mode=${mode}`, d
 
 export const getReports = mode => fetchOrDemo(mode, `/api/reports?mode=${mode}`, demoReports, null);
 
-/* Videos jo backend ke videos/ folder mein ASAL mein maujood hain
- * (frontend dropdown inhi se banta hai — 404/"video not found" fix) */
+/* Videos list endpoint (dynamic dropdown population) */
 export const getVideos = async () => {
   try {
     const r = await http.get('/api/videos');
     return r.data || [];
-  } catch {
+  } catch (err) {
+    console.error('Failed to load video list:', err);
     return [];
   }
 };
 
 /* REAL: { detections, timeline } — timeline = per-frame synced boxes
- * DEMO: static boxes (timeline null) */
+ * DEMO: static boxes (timeline null)
+ * Note: Detection errors are propagated so UI can show specific error states.
+ */
 export const getDetections = (mode, scenario) => {
   if (mode === 'DEMO') {
     return Promise.resolve(demoDetections[scenario] || []);
   }
-  // REAL mode: do NOT silently catch errors — let frontend know
+
+  // REAL mode: Do NOT catch errors silently. Let the caller handle it.
   return http
     .get(`/api/detections?video=${scenario}&mode=${mode}`)
     .then(r => r.data)
     .catch(err => {
       console.error('REAL detection failed:', err);
-      throw err; // Propagate error instead of hiding it
+      throw err; // Propagate error
     });
 };

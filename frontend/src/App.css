@@ -1,3 +1,64 @@
+/* ==============================
+   GLOBAL RESET & UTILITIES
+   (SafeVision AI Dark Theme)
+   ============================== */
+
+:root {
+  /* Ensure consistent box-sizing for all elements */
+  *, *::before, *::after {
+    box-sizing: border-box;
+  }
+
+  /* Smooth scrolling for anchor links if any */
+  html {
+    scroll-behavior: smooth;
+  }
+
+  /* Font Rendering Optimization */
+  body {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+}
+
+/* Custom Scrollbar for Chrome/Safari/Edge */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0f172a; /* slate-950 */
+}
+
+::-webkit-scrollbar-thumb {
+  background: #334155; /* slate-700 */
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #475569; /* slate-600 */
+}
+
+/* Firefox Scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #334155 #0f172a;
+}
+
+/* Selection Color */
+::selection {
+  background-color: rgba(16, 185, 129, 0.3); /* emerald-500 with opacity */
+  color: #ffffff;
+}
+
+/* ==============================
+   LEGACY VITE DEMO STYLES
+   (Commented Out - Not Used in SafeVision)
+   ============================== */
+
+/* 
 .counter {
   font-size: 16px;
   padding: 5px 10px;
@@ -177,8 +238,10 @@
     left: 0;
     border-left-color: var(--border);
   }
+
   &::after {
     right: 0;
     border-right-color: var(--border);
   }
 }
+*/

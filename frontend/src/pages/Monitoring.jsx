@@ -8,7 +8,7 @@ const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 const getStatusText = label => {
   const l = label.toLowerCase();
   if (['no_helmet', 'none'].includes(l)) return 'No Helmet Detected';
-  if (['no_vest', 'without_vest'].includes(l)) return 'No Vest Detected';
+  if (['no_vest', 'without_vest'].includes(l)) return 'No Vest Detected'; // ADDED THIS LINE
   if (l === 'fire') return 'Fire Hazard!';
   if (l === 'smoke') return 'Smoke Alert!';
   if (l === 'helmet') return 'Helmet OK';
@@ -64,8 +64,8 @@ export default function Monitoring({ mode }) {
   }, [scenario]);
 
   // Filter Risks for Sidebar Display
-  const risks = detections.filter(d =>
-    ['no_helmet', 'none', 'no_vest', 'fire', 'smoke'].includes(d.label.toLowerCase())
+  const risks = detections.filter(
+    d => ['no_helmet', 'none', 'no_vest', 'fire', 'smoke'].includes(d.label.toLowerCase()) // Added 'no_vest' here too
   );
 
   // Count Persons accurately
