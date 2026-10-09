@@ -132,7 +132,7 @@ export default function Monitoring({ mode }) {
       <div className="space-y-4">
         {/* Total Persons Card */}
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm">
-          <p className="text-sm text-slate-400 mb-1">Persons Detected</p>
+          <p className="text-sm text-slate-400 mb-1">Visible in Current Frame</p>
           <p className="text-4xl font-bold text-slate-100">{personsDetected}</p>
         </div>
 

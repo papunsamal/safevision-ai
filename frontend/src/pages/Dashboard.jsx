@@ -28,7 +28,12 @@ export default function Dashboard({ mode }) {
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <Card icon={Users} label="Total Workers" value={stats?.totalWorkers} tone="text-blue-400" />
+        <Card
+          icon={Users}
+          label="Total Unique Personnel (Session)"
+          value={stats?.totalWorkers}
+          tone="text-blue-400"
+        />
         <Card
           icon={HardHat}
           label="PPE Violations"
