@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import AlertCard from '../components/AlertCard';
 import { getAlerts } from '../services/api';
-import { Inbox } from 'lucide-react'; // For empty state icon
+import { Inbox } from 'lucide-react';
 
 export default function Alerts({ mode }) {
   const [alerts, setAlerts] = useState([]);
@@ -20,7 +20,6 @@ export default function Alerts({ mode }) {
       });
   }, [mode]);
 
-  // Loading State
   if (loading) {
     return (
       <div className="space-y-4 animate-pulse">
@@ -31,20 +30,18 @@ export default function Alerts({ mode }) {
     );
   }
 
-  // Empty State
   if (!alerts.length) {
     return (
       <div className="flex flex-col items-center justify-center h-64 text-slate-500 space-y-3">
         <Inbox size={48} className="opacity-20" />
         <p className="text-sm font-medium">No active incidents logged.</p>
         <p className="text-xs opacity-60">
-          Run a video analysis or check live feed to generate alerts.
+          Run a video analysis or check the live feed to generate alerts.
         </p>
       </div>
     );
   }
 
-  // Success State
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between mb-2">

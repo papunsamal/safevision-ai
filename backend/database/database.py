@@ -81,7 +81,7 @@ def fetch_incidents(limit: int = 50):
             {
                 "id": i, "type": t, "severity": sev, "message": msg,
                 "camera": cam, "zone": zone, "frame_url": furl,
-                "time": str(created)[11:16] if created else "—",
+                "time": str(created)[11:19] if created else "—",
             }
             for (i, t, sev, msg, cam, zone, furl, created) in rows
         ]
@@ -126,7 +126,10 @@ def fetch_trends(days: int = 7):
         )
         comp_rows = cur.fetchall()
         cur.execute(
-            "SELECT DATE(created_at), SUM(type='PPE'), SUM(type='FIRE'), SUM(type='SMOKE') "
+            "SELECT DATE(created_at), "
+            "SUM(CASE WHEN type='PPE' THEN 1 ELSE 0 END), "
+            "SUM(CASE WHEN type='FIRE' THEN 1 ELSE 0 END), "
+            "SUM(CASE WHEN type='SMOKE' THEN 1 ELSE 0 END) "
             "FROM incidents WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL %s DAY) "
             "GROUP BY DATE(created_at) ORDER BY DATE(created_at)",
             (days,),

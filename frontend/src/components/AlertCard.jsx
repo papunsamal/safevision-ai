@@ -1,4 +1,4 @@
-import { Flame, Wind, HardHat, Shirt, Hand, Info } from 'lucide-react'; // Added Shirt & Hand icons
+import { Flame, Wind, HardHat, Shirt, Hand, Info } from 'lucide-react';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -19,24 +19,17 @@ const getIconAndColor = alert => {
     return { Icon: Wind, color: 'text-orange-400', bg: 'bg-orange-900/20 border-orange-800' };
   }
 
-  // PPE Violations (Helmet, Vest, Gloves)
+  // PPE Violations
   if (alert.type === 'PPE') {
-    // Specific Check for Helmet
     if (msg.includes('helmet') || rule === 'NO_HELMET') {
       return { Icon: HardHat, color: 'text-yellow-400', bg: 'bg-yellow-900/20 border-yellow-800' };
     }
-
-    // Specific Check for Vest (Future-proofing your logic)
     if (msg.includes('vest') || rule === 'NO_VEST') {
       return { Icon: Shirt, color: 'text-purple-400', bg: 'bg-purple-900/20 border-purple-800' };
     }
-
-    // Specific Check for Gloves
     if (msg.includes('glove') || rule === 'NO_GLOVES') {
       return { Icon: Hand, color: 'text-blue-400', bg: 'bg-blue-900/20 border-blue-800' };
     }
-
-    // Default PPE (Generic Warning)
     return { Icon: HardHat, color: 'text-slate-300', bg: 'bg-slate-800 border-slate-700' };
   }
 
@@ -58,7 +51,7 @@ export default function AlertCard({ alert }) {
     <div
       className={`flex items-start gap-3 rounded-xl p-4 border transition-all hover:shadow-md ${bg}`}
     >
-      {/* Left: Icon Container */}
+      {/* Left: Icon */}
       <span className={`p-2 rounded-lg bg-black/20 backdrop-blur-sm ${color}`}>
         <Icon size={20} strokeWidth={2.5} />
       </span>
@@ -68,9 +61,10 @@ export default function AlertCard({ alert }) {
         <div className="flex items-center justify-between gap-2 mb-1">
           <p className="text-sm font-semibold text-slate-100 truncate">{alert.message}</p>
 
-          {/* Severity Badge */}
           <span
-            className={`text-[10px] font-bold px-2 py-0.5 rounded-full border whitespace-nowrap ${sevTone[alert.severity] || sevTone.MEDIUM}`}
+            className={`text-[10px] font-bold px-2 py-0.5 rounded-full border whitespace-nowrap ${
+              sevTone[alert.severity] || sevTone.MEDIUM
+            }`}
           >
             {alert.severity}
           </span>
@@ -82,19 +76,23 @@ export default function AlertCard({ alert }) {
           <span>•</span>
           <span>{alert.zone}</span>
           <span>•</span>
-          <span className="italic">{alert.time}</span>
+          <span className="italic font-mono">{alert.time}</span>
         </p>
 
-        {/* Evidence Snapshot */}
+        {/* Evidence Snapshot with Zoom */}
         {alert.frame_url && (
-          <div className="mt-3 relative group cursor-pointer overflow-hidden rounded-lg border border-slate-700 w-fit max-w-full">
+          <div
+            className="mt-3 relative group cursor-pointer overflow-hidden rounded-lg border border-slate-700 w-fit max-w-full hover:border-emerald-500/50 transition-colors"
+            onClick={() => window.open(`${API}${alert.frame_url}`, '_blank')}
+            title="Click to view full size"
+          >
             <img
               src={`${API}${alert.frame_url}`}
               alt="Evidence"
-              className="h-28 object-cover opacity-90 group-hover:opacity-100 transition-opacity"
+              className="h-32 object-cover opacity-90 group-hover:opacity-100 transition-opacity"
             />
-            <div className="absolute bottom-1 right-1 bg-black/60 px-1.5 py-0.5 rounded text-[9px] text-white uppercase tracking-wider">
-              Evidence
+            <div className="absolute bottom-1 right-1 bg-black/70 px-2 py-0.5 rounded text-[9px] text-white uppercase tracking-wider">
+              Evidence 🔍
             </div>
           </div>
         )}

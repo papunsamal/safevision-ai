@@ -13,13 +13,11 @@ export default function WorkerCard({ id, helmet, vest, gloves }) {
           : 'border-red-500/40 bg-red-900/10 hover:border-red-500/60 shadow-md'
       }`}
     >
-      {/* Header Row */}
       <div className="flex items-center justify-between mb-3">
         <p className="text-sm font-bold text-slate-200 flex items-center gap-2">
           Worker #{id}
           {!isCompliant && <AlertTriangle size={14} className="text-red-400 animate-pulse" />}
         </p>
-
         <span
           className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border ${
             isCompliant
@@ -31,19 +29,13 @@ export default function WorkerCard({ id, helmet, vest, gloves }) {
         </span>
       </div>
 
-      {/* Gear Chips Container */}
       <div className="flex flex-wrap gap-2">
-        {/* Helmet Chip (Critical) */}
         <Chip ok={!!helmet} label="Helmet" type="critical" />
-
-        {/* Vest Chip (Informational only - as per README) */}
-        {vest !== undefined && <Chip ok={!!vest} label="Vest (info)" type="info" />}
-
-        {/* Gloves Chip (Secondary PPE) */}
+        {/* HONEST LABEL: "Not Checked" instead of "Vest (info)" */}
+        {vest !== undefined && <Chip ok={!!vest} label={vest ? 'Vest' : 'Vest: N/A'} type="info" />}
         {gloves !== undefined && <Chip ok={!!gloves} label="Gloves" type="secondary" />}
       </div>
 
-      {/* Subtle Glow Effect for Non-Compliant Cards */}
       {!isCompliant && (
         <div className="absolute inset-0 pointer-events-none rounded-xl ring-1 ring-inset ring-red-500/20"></div>
       )}
@@ -51,24 +43,18 @@ export default function WorkerCard({ id, helmet, vest, gloves }) {
   );
 }
 
-/**
- * Reusable Chip Component with distinct styles based on importance
- */
 function Chip({ ok, label, type = 'default' }) {
   let toneClasses = '';
 
   if (type === 'critical') {
-    // Helmet: High Contrast
     toneClasses = ok
       ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
       : 'bg-red-500/20 text-red-400 border-red-500/30';
   } else if (type === 'info') {
-    // Vest: Neutral/Grey (Not a hard violation in this build)
     toneClasses = ok
       ? 'bg-slate-700/50 text-slate-300 border-slate-600'
-      : 'bg-slate-800/50 text-slate-500 border-slate-700 italic'; // Dimmed if missing
+      : 'bg-slate-800/50 text-slate-500 border-slate-700 italic';
   } else {
-    // Default/Gloves
     toneClasses = ok
       ? 'bg-blue-500/10 text-blue-400 border-blue-500/20'
       : 'bg-orange-500/10 text-orange-400 border-orange-500/20';

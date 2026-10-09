@@ -1,41 +1,43 @@
 import json
 import os
+
 from ..config import settings
+from ..utils.logger import get_logger
 
-# Load zones from config file if exists, otherwise use defaults
-ZONES_CONFIG = {
-    "CAM-01": {"name": "Production Area", "risk_level": "HIGH"},
-    "CAM-02": {"name": "Warehouse", "risk_level": "MEDIUM"},
-    "CAM-03": {"name": "Boiler Area", "risk_level": "CRITICAL"},
-    "CAM-LIVE": {"name": "Live Feed Zone", "risk_level": "UNKNOWN"},
-}
+logger = get_logger("zone_rules")
 
-def load_zones():
-    """Loads zone configurations from configs/zones.json if available."""
-    global ZONES_CONFIG
-    config_path = os.path.join(settings.CONFIGS_DIR, "zones.json")
-    
-    if os.path.exists(config_path):
-        try:
-            with open(config_path, 'r') as f:
-                data = json.load(f)
-                # Convert list of dicts to dict keyed by camera_id for faster lookup
-                ZONES_CONFIG = {item['id']: item for item in data}
-        except Exception as e:
-            print(f"Warning: Could not load zones.json ({e}). Using defaults.")
-    else:
-        print("Info: No zones.json found. Using default hardcoded zones.")
+_zones = None
 
-# Initialize on import
-load_zones()
+
+def _load_zones():
+    global _zones
+    if _zones is not None:
+        return _zones
+    try:
+        path = os.path.join(settings.CONFIGS_DIR, "zones.json")
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        # Support BOTH formats:
+        # Format 1 (list): {"zones": [{"id":..., "name":..., "cameras":[...]}]}
+        # Format 2 (dict): {"CAM-01": {"id":..., "name":...}}
+        _zones = {}
+        if isinstance(data, dict) and "zones" in data:
+            for zone in data["zones"]:
+                for cam in zone.get("cameras", []):
+                    _zones[cam] = {"id": zone["id"], "name": zone["name"]}
+        elif isinstance(data, dict):
+            _zones = data
+        else:
+            _zones = {}
+
+        logger.info(f"Loaded {len(_zones)} camera-zone mappings")
+    except Exception as e:
+        logger.error(f"zone load failed: {e}")
+        _zones = {}
+    return _zones
+
 
 def zone_for_camera(camera_id: str) -> dict:
-    """
-    Returns the zone details for a given camera ID.
-    If unknown, returns a generic 'Unknown Zone'.
-    """
-    return ZONES_CONFIG.get(camera_id, {"name": "Unknown Zone", "risk_level": "LOW"})
-
-def get_all_zones() -> list:
-    """Returns all configured zones as a list."""
-    return list(ZONES_CONFIG.values())
+    zones = _load_zones()
+    return zones.get(camera_id, {"id": "Z0", "name": "Unknown"})

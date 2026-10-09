@@ -12,9 +12,9 @@ import {
   Legend,
 } from 'recharts';
 import { getReports } from '../services/api';
-import { Activity, AlertCircle, Database } from 'lucide-react'; // Icons for status
+import { Activity, AlertCircle, Database } from 'lucide-react';
 
-// Custom Tooltip Component for better readability
+// Custom Tooltip Component
 const CustomTooltip = ({ active, payload, label }) => {
   if (active && payload && payload.length) {
     return (
@@ -82,14 +82,15 @@ export default function Reports({ mode }) {
     !reports ||
     ((reports.complianceTrend?.length || 0) === 0 && (reports.incidentTrend?.length || 0) === 0);
 
+  // Empty State — ENGLISH
   if (empty) {
     return (
       <div className="flex flex-col items-center justify-center h-64 text-slate-500 space-y-3 bg-slate-900/30 rounded-xl border border-dashed border-slate-700">
         <Database size={48} className="opacity-20" />
         <p className="text-sm font-medium">No historical data available yet.</p>
         <p className="text-xs opacity-60 max-w-md text-center">
-          Real analyses ke baad trends yahan MySQL se automatically populate honge. Run a few video
-          sessions or check live feed to generate data points.
+          Trends will populate automatically from MySQL after real video analyses are run. Run a few
+          sessions or check the live feed to generate data points.
         </p>
       </div>
     );
@@ -111,7 +112,6 @@ export default function Reports({ mode }) {
       <div className="grid lg:grid-cols-2 gap-6">
         {/* Compliance Trend Chart */}
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 relative overflow-hidden group">
-          {/* Subtle Glow */}
           <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/5 blur-3xl rounded-full -mr-16 -mt-16 pointer-events-none"></div>
 
           <h3 className="font-semibold text-slate-100 mb-4 relative z-10">
@@ -157,7 +157,6 @@ export default function Reports({ mode }) {
 
         {/* Incident Trend Chart */}
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 relative overflow-hidden group">
-          {/* Subtle Glow */}
           <div className="absolute bottom-0 left-0 w-32 h-32 bg-purple-500/5 blur-3xl rounded-full -ml-16 -mb-16 pointer-events-none"></div>
 
           <h3 className="font-semibold text-slate-100 mb-4 relative z-10">

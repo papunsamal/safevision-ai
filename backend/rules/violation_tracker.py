@@ -18,14 +18,14 @@ def record_incident(violation, camera_id, zone_name, frame_url=None):
         "message": violation["message"],
         "camera": camera_id,
         "zone": zone_name,
-        "time": datetime.now().strftime("%H:%M"),
+        "time": datetime.now().strftime("%H:%M:%S"),
         "worker_id": violation.get("worker_id"),
     }
     _incident_counter += 1
     _recent_incidents.insert(0, incident)
     _recent_incidents[:] = _recent_incidents[:50]
 
-        # Persistent storage (MySQL)
+    # Persistent storage (MySQL)
     try:
         database.insert_incident(incident, frame_url)
     except Exception as e:
