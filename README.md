@@ -384,6 +384,87 @@ safevision-ai/
 Large binary assets such as models, videos and generated evidence are intentionally excluded from GitHub.
 
 ---
+📂 FINAL PROJECT STRUCTURE:
+safevision-ai/
+│
+├── 📄 README.md                  # Comprehensive English documentation (PS6 aligned)
+├── 📄 requirements.txt           # Python dependencies pinned for reproducibility
+├── .env.example                  # Template for secrets (MySQL creds, AI_MODE flag)
+├── .gitignore                    # Excludes models/, videos/, evidence/, venv/
+│
+├── backend/                      # ⚙️ FASTAPI BACKEND CORE
+│   ├── main.py                   # App entry point, CORS setup, static file mounts
+│   ├── config.py                 # Env-driven settings loader (.env parsing)
+│   │
+│   ├── api/                      # 🔌 ROUTE HANDLERS (Controllers)
+│   │   ├── detection.py          # Video analysis logic (multi-frame merge, timeline sync)
+│   │   ├── live.py               # Webcam MJPEG streaming endpoint (/api/live/stream)
+│   │   ├── alerts.py             # Incident retrieval & report trends generation
+│   │   ├── workers.py            # Per-worker PPE compliance status endpoints
+│   │   └── cameras.py            # Camera inventory & zone mapping listings
+│   │
+│   ├── ai/                       # 🧠 ARTIFICIAL INTELLIGENCE LAYER
+│   │   ├── ppe_detector.py       # Wrapper for Custom YOLOv8 PPE Model (helmet/vest/etc.)
+│   │   └── fire_smoke_detector.py# Wrapper for Shared Fire/Smoke YOLOv8 Instance
+│   │
+│   ├── rules/                    # ⚖️ BUSINESS LOGIC ENGINE (The "Smart" Part)
+│   │   ├── compliance_engine.py  # Spatial IoU matching (Person ↔ Gear association)
+│   │   ├── zone_rules.py         # Resolves CAM-ID → Physical Zone Name via JSON
+│   │   └── violation_tracker.py  # Temporal confirmation (2+ frames) & ring buffer
+│   │
+│   ├── alerts/                   # 🚨 ALERT MANAGEMENT SYSTEM
+│   │   └── alert_manager.py      # Deduplication logic (60s cooldown), MySQL-backed state
+│   │
+│   ├── database/                 # 💾 DATA PERSISTENCE LAYER
+│   │   ├── models.py             # SQL Schema definitions (DDL for incidents/stats/cooldowns)
+│   │   └── database.py           # Connection pooling, safe queries, graceful degradation
+│   │
+│   └── utils/                    # 🛠️ HELPER MODULES
+│       ├── video.py              # Frame sampling, aspect ratio correction, bbox conversion
+│       ├── evidence.py           # JPEG snapshot capture & saving to disk
+│       └── logger.py             # Structured logging with timestamps & module names
+│
+├── frontend/                     # 🖥️ REACT DASHBOARD UI
+│   ├── package.json              # Node.js dependencies
+│   ├── vite.config.js            # Build tool configuration
+│   ├── tailwind.config.js        # Utility-first CSS theme setup
+│   │
+│   └── src/
+│       ├── components/           # Reusable UI Elements
+│       │   ├── Sidebar.jsx       # Navigation menu
+│       │   ├── StatCard.jsx      # Metric display widgets
+│       │   └── AlertCard.jsx     # Incident card with evidence thumbnail
+│       │
+│       ├── pages/                # Route-level Views
+│       │   ├── Dashboard.jsx     # Home screen with real-time stats
+│       │   ├── Monitoring.jsx    # Live video feed + bounding box overlay player
+│       │   ├── Alerts.jsx        # Historical incident log with filters
+│       │   └── Reports.jsx       # Compliance trend charts (Recharts integration)
+│       │
+│       ├── services/             # API Abstraction Layer
+│       │   └── apiClient.js      # Axios instances for backend communication
+│       │
+│       └── App.jsx               # Main router & layout wrapper
+│
+├── configs/                      # 🗺️ EXTERNALIZABLE POLICIES
+│   ├── zones.json                # Maps Camera IDs (CAM-01..04, LIVE) to Zones
+│   └── ppe_rules.json            # Defines required vs optional safety gear classes
+│
+├── notebooks/                    # 📓 REPRODUCIBLE ML TRAINING
+│   ├── ppe_training.ipynb        # Colab notebook for YOLOv8 PPE model fine-tuning
+│   └── fire_smoke_training.ipynb # Colab notebook for Fire/Smoke model training
+│
+├── models/                       # 🤖 GITIGNORED BINARY ASSETS
+│   ├── ppe_model.pt              # Trained weights for PPE detection
+│   └── fire_smoke_model.pt       # Trained weights for hazard detection
+│
+├── videos/                       # 🎥 GITIGNORED INPUT MEDIA
+│   ├── compliant.mp4             # Sample footage: All workers wearing PPE
+│   ├── violation.mp4             # Sample footage: Missing helmets detected
+│   └── fire_smoke.mp4            # Sample footage: Visible hazards
+│
+└── evidence/                     # 📸 RUNTIME GENERATED ARTIFACTS
+    └── alerts/                   # Auto-saved JPEG snapshots of violations
 
 # 🤝 Hackathon
 
