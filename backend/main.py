@@ -48,16 +48,24 @@ def effective_mode() -> str:
 @app.get("/health")
 def health():
     logger.info("Health check requested")
+    
+    # Determine actual mode based on ENV setting AND file existence
+    env_is_real = settings.AI_MODE == "REAL"
+    model_exists = os.path.exists(settings.MODEL_PATH)
+    
+    # Honesty Policy: If env says REAL but model missing -> Force DEMO
+    actual_mode = "REAL" if (env_is_real and model_exists) else "DEMO"
+
     return {
         "status": "ok",
-        "mode": effective_mode(),
+        "mode": actual_mode,
         "models": {
-            "ppe_model": os.path.exists(settings.MODEL_PATH),
+            "ppe_model": model_exists,
             "fire_smoke_model": os.path.exists(settings.FIRE_SMOKE_MODEL_PATH),
         },
         "supported_classes": (
             ppe_detector.supported_classes()
-            if os.path.exists(settings.MODEL_PATH)
+            if model_exists
             else ["person"]
         ),
     }

@@ -38,44 +38,51 @@ def _live_gen(cap):
     last_dets = []
     pending = {}
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        frame_no += 1
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
+            frame_no += 1
 
-        if frame_no % 10 == 0:
-            # FIX: ek hi inference — fire + smoke dono (shared model)
-            dets = ppe_detector.detect(frame) + fire_smoke_detector.detect_all(frame)
-            last_dets = dets
+            # Har 10th frame par AI inference chalao (Performance optimization)
+            if frame_no % 10 == 0:
+                dets = ppe_detector.detect(frame) + fire_smoke_detector.detect_all(frame)
+                last_dets = dets
 
-            # Temporal confirmation: 2 consecutive processed frames par hi PPE incident
-            analysis = compliance_engine.analyze_detections(dets)
-            new_pending = {}
-            for v in analysis["violations"]:
-                sig = (v["rule"], v.get("worker_id"))
-                c = pending.get(sig, 0) + 1
-                new_pending[sig] = c
-                if c >= 2:
-                    alert_manager.report_violation(v, CAMERA_ID, zone_name)
-            pending = new_pending
+                analysis = compliance_engine.analyze_detections(dets)
+                new_pending = {}
+                
+                # Temporal Confirmation: Violation 2 baar dikhe tab alert bhejo
+                for v in analysis["violations"]:
+                    sig = (v["rule"], v.get("worker_id"))
+                    c = pending.get(sig, 0) + 1
+                    new_pending[sig] = c
+                    if c >= 2:
+                        alert_manager.report_violation(v, CAMERA_ID, zone_name)
+                pending = new_pending
 
-            for lbl in ("fire", "smoke"):
-                if any(d["label"] == lbl for d in dets):
-                    alert_manager.report_violation(
-                        {"type": lbl.upper(),
-                         "severity": "CRITICAL" if lbl == "fire" else "HIGH",
-                         "message": f"{lbl.capitalize()} Detected"},
-                        CAMERA_ID, zone_name)
+                # Fire/Smoke Alerts
+                for lbl in ("fire", "smoke"):
+                    if any(d["label"] == lbl for d in dets):
+                        alert_manager.report_violation(
+                            {"type": lbl.upper(),
+                             "severity": "CRITICAL" if lbl == "fire" else "HIGH",
+                             "message": f"{lbl.capitalize()} Detected"},
+                            CAMERA_ID, zone_name)
 
-        # Flicker fix: HAR frame par last detections draw karo
-        frame = _draw(frame, last_dets)
-
-        ok, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
-        if ok:
-            yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
-                   + jpeg.tobytes() + b"\r\n")
-    cap.release()
+            # Boxes draw karo aur JPEG encode karo
+            frame = _draw(frame, last_dets)
+            ok, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            if ok:
+                yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
+                       + jpeg.tobytes() + b"\r\n")
+                       
+    finally:
+        # YE HI MAIN FIX HAI: Stream stop hote hi camera release kar do
+        cap.release()
+        logger.info("LIVE stream stopped, camera released safely.")
 
 
 @router.get("/live/stream")
